@@ -1,3 +1,16 @@
+import { Client } from "@notionhq/client";
+import { NotionToMarkdown } from "notion-to-md";
+import "dotenv/config";
+import type { BlockChildrenResponseExtended } from "./types.js";
+import type { ListBlockChildrenResponseResults } from "notion-to-md/build/types/index.js";
+
+const NOTION_SECRET = process.env.NOTION_SECRET!;
+
+// Initializing a client
+const notion = new Client({
+  auth: NOTION_SECRET,
+});
+
 // passing notion client to the option
 const n2m = new NotionToMarkdown({
   notionClient: notion,
@@ -6,7 +19,7 @@ const n2m = new NotionToMarkdown({
   },
 });
 
-async function retrievePage(pageId: string) {
+export async function retrievePage(pageId: string) {
   const blocks = (await notion.blocks.children.list({
     block_id: pageId,
   })) as unknown as { results: BlockChildrenResponseExtended[] };
