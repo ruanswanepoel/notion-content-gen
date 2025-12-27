@@ -1,8 +1,8 @@
 {
-  // Visit https://aka.ms/tsconfig to read more about this file
+  "include": ["./src/**/*", "./bin/**/*"],
   "compilerOptions": {
     // File Layout
-    "rootDir": "./src",
+    "rootDir": ".",
     "outDir": "./dist",
 
     // Environment Settings
@@ -32,6 +32,10 @@
     // "noUnusedParameters": true,
     // "noFallthroughCasesInSwitch": true,
     // "noPropertyAccessFromIndexSignature": true,
+
+    // JS
+    "allowJs": true,
+    "checkJs": true,
 
     // Recommended Options
     "strict": true,

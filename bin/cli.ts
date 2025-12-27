@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { Command } from "commander";
+import { init } from "./commands/init.js";
+import { generate } from "./commands/generate.js";
 
 const program = new Command();
 
@@ -12,13 +14,12 @@ program
 program
   .command("init")
   .description("Initialize notion-content-gen inside a project")
-  .action(() => {
-    //
-  });
+  .option("-c, --config <type>", "Config type: js | json | ts", "js")
+  .action(init);
 
 program
   .command("generate")
   .description("Generates the markdown")
-  .action(() => {
-    //
-  });
+  .action(generate);
+
+program.parse(process.argv);

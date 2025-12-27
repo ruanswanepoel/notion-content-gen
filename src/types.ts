@@ -1,3 +1,5 @@
+import z from "zod";
+
 export type BlockChildrenResponseExtended = {
   object: string;
   id: string;
@@ -23,3 +25,12 @@ export type BlockChildrenResponseExtended = {
     title: string;
   };
 };
+
+// External Config
+export const ConfigSchema = z.object({
+  notionToken: z.string().min(1, "notionToken is required"),
+  databaseId: z.string().min(1, "databaseId is required"),
+  outputDir: z.string().default("content"),
+});
+
+export type Config = z.infer<typeof ConfigSchema>;

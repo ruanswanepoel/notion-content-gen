@@ -1,16 +1,13 @@
 {
   "name": "notion-content-gen",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
   "type": "module",
   "bin": {
-    "notion-content-gen": "./bin/index.js"
+    "notion-content-gen": "./dist/bin/cli.js"
   },
   "scripts": {
     "check": "tsc --noEmit",
     "build": "tsc",
-    "test-run": "pnpm build && node dist/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -21,7 +18,8 @@
     "@notionhq/client": "^5.4.0",
     "commander": "^14.0.2",
     "dotenv": "^17.2.3",
-    "notion-to-md": "^3.1.9"
+    "notion-to-md": "^3.1.9",
+    "zod": "^4.2.1"
   },
   "devDependencies": {
     "@types/node": "^24.10.2",
