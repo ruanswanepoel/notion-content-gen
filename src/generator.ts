@@ -3,6 +3,9 @@ import path from "path";
 import { slugify } from "./util.js";
 import type { Node } from "./node.js";
 
+/**
+ * Generates the content (page tree and markdown files) for the given node in the specified directory.
+ */
 export function writeMarkdownPageTree(node: Node, dir: string) {
   const nodeSlug = slugify(node.notionTitle);
   const newDir = path.join(dir, nodeSlug); // Only relevant if there are childNodes

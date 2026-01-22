@@ -29,8 +29,8 @@ export type BlockChildrenResponseExtended = {
 // External Config
 export const ConfigSchema = z.object({
   notionToken: z.string().min(1, "notionToken is required"),
-  databaseId: z.string().min(1, "databaseId is required"),
-  outputDir: z.string().default("content"),
+  notionPageId: z.string().min(1, "notionPageId is required"),
+  contentDir: z.string().default("content"),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

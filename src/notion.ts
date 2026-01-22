@@ -4,14 +4,13 @@ import "dotenv/config";
 import type { BlockChildrenResponseExtended } from "./types.js";
 import type { ListBlockChildrenResponseResults } from "notion-to-md/build/types/index.js";
 
+// TODO: Use config
 const NOTION_SECRET = process.env.NOTION_SECRET!;
 
-// Initializing a client
 const notion = new Client({
   auth: NOTION_SECRET,
 });
 
-// passing notion client to the option
 const n2m = new NotionToMarkdown({
   notionClient: notion,
   config: {
@@ -19,6 +18,9 @@ const n2m = new NotionToMarkdown({
   },
 });
 
+/**
+ * Retrieves a single Notion page and conveniently converts the content to markdown and finds the child pages.
+ */
 export async function retrievePage(pageId: string) {
   const blocks = (await notion.blocks.children.list({
     block_id: pageId,

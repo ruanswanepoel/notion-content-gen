@@ -1,6 +1,9 @@
 import { retrievePage } from "./notion.js";
 import type { BlockChildrenResponseExtended } from "./types.js";
 
+/**
+ * Represents a notion page (content node) with its own content, metadata, and sub-pages.
+ */
 export type Node = {
   notionId: string;
   notionTitle: string;
@@ -13,6 +16,9 @@ export type Node = {
   childNodes: Node[];
 };
 
+/**
+ * Builds the page/node tree according to the layout in Notion, starting from the given root page ID.
+ */
 export async function buildPageTree(rootId: string) {
   const rootNode: Node = {
     notionId: rootId,

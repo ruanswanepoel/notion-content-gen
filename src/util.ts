@@ -1,4 +1,6 @@
 import type { Node } from "./node.js";
+import { readFileSync } from "fs";
+import { join } from "path";
 
 export function safeStringify(obj: object) {
   const seen = new WeakSet();
@@ -36,4 +38,13 @@ export function getTreeString(node: Node, depth = 0) {
   }
 
   return nodeStr;
+}
+
+export function getPackageType(cwd = process.cwd()): "module" | "commonjs" {
+  try {
+    const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
+    return pkg.type === "module" ? "module" : "commonjs";
+  } catch {
+    return "commonjs"; // Node default
+  }
 }

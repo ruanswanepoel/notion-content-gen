@@ -1,30 +1,32 @@
 import path from "path";
 import fs from "fs";
+import { getPackageType } from "../../src/util.js";
 
-const DEFAULT_JSON_CONFIG = JSON.stringify(
-  {
-    notionToken: "",
-    notionPageId: "",
-    contentDir: "content",
-  },
-  null,
-  2,
-);
-const DEFAULT_JS_CONFIG = `module.exports = {
-  notionToken: process.env.NOTION_TOKEN,
-  notionPageId: "",
-  contentDir: "content",
-};
+const packageType = getPackageType();
+
+const DEFAULT_JSON_CONFIG = `{
+  "notionToken": "NOTION_SECRET",
+  "notionPageId": "",
+  "contentDir": "content"
+}
 `;
 
-const DEFAULT_TS_CONFIG = `import type { Config } from "./src/types";
-
-const config: Config = {
-  notionToken: process.env.NOTION_TOKEN!,
+const DEFAULT_JS_CONFIG = `import 'dotenv/config'
+const config = {
+  notionToken: process.env.NOTION_SECRET,
   notionPageId: "",
   contentDir: "content",
 };
+${packageType == "module" ? "export default config;" : "module.exports = config;"}
+`;
 
+// TODO: The type here may need to change
+const DEFAULT_TS_CONFIG = `import type { Config } from "./src/types";
+const config: Config = {
+  notionToken: process.env.NOTION_SECRET!,
+  notionPageId: "",
+  contentDir: "content",
+};
 export default config;
 `;
 
@@ -55,5 +57,5 @@ export async function init(options: { config: string }) {
 
   fs.writeFileSync(targetPath, contents, "utf-8");
 
-  console.log(`Created ${filename}`);
+  console.log(`Created file: ${filename}`);
 }

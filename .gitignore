@@ -5,4 +5,5 @@ dist/
 .env
 
 notion-content-gen.*
+content/
 

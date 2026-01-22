@@ -1,7 +1,9 @@
+import "dotenv/config";
 import fs from "fs";
 import path from "path";
 import { pathToFileURL } from "url";
 import { ConfigSchema } from "../src/types.js";
+import z from "zod";
 
 const CONFIG_FILES = [
   "notion-content-gen.config.ts",
@@ -35,7 +37,7 @@ export async function loadConfig() {
 
   if (!parsed.success) {
     console.error("Invalid configuration:");
-    console.error(parsed.error.format());
+    console.error(z.prettifyError(parsed.error));
     process.exit(1);
   }
 
