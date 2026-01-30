@@ -1,4 +1,4 @@
-import { retrievePage } from "./notion.js";
+import type { Notion } from "./notion.js";
 import type { BlockChildrenResponseExtended } from "./types.js";
 
 /**
@@ -9,7 +9,7 @@ export type Node = {
   notionTitle: string;
   notionPage:
     | ({ metadata?: BlockChildrenResponseExtended } & Partial<
-        Awaited<ReturnType<typeof retrievePage>>
+        Awaited<ReturnType<typeof Notion.prototype.retrievePage>>
       >)
     | null;
   parentNode: Node | null;
@@ -19,7 +19,7 @@ export type Node = {
 /**
  * Builds the page/node tree according to the layout in Notion, starting from the given root page ID.
  */
-export async function buildPageTree(rootId: string) {
+export async function buildPageTree(rootId: string, notion: Notion) {
   const rootNode: Node = {
     notionId: rootId,
     notionTitle: "Root",
@@ -31,7 +31,7 @@ export async function buildPageTree(rootId: string) {
 
   for (let i = 0; i < queue.length; i++) {
     const node = queue[i]!; // Currunt node, never undefined
-    const retrievedPage = await retrievePage(node.notionId);
+    const retrievedPage = await notion.retrievePage(node.notionId);
     node.notionPage = {
       ...node.notionPage, // Preserve existing metadata
       ...retrievedPage,
