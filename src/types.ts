@@ -1,4 +1,22 @@
+import type { BlockObjectResponse, PageObjectResponse } from "@notionhq/client";
 import z from "zod";
+
+// Notion types
+export type NotionBlock = BlockObjectResponse;
+export type NotionPage = PageObjectResponse;
+
+// Extended Notion types
+/// Represents the metadata in a Notion page
+export type NcgNotionMetadata = {
+  published?: boolean;
+  title?: string;
+  description?: string;
+  slug?: string;
+};
+export type NotionPageExtended = NotionPage & {
+  ncgMetadata?: NcgNotionMetadata;
+  child_page?: NotionPageExtended;
+};
 
 export type BlockChildrenResponseExtended = {
   object: string;

@@ -1,4 +1,4 @@
-import type { Node } from "./node.js";
+import type { PageNode } from "./page_node.js";
 import { readFileSync } from "fs";
 import { join } from "path";
 
@@ -28,7 +28,7 @@ export function slugify(str: string) {
     .replace(/^-+|-+$/g, ""); // trim hyphens
 }
 
-export function getTreeString(node: Node, depth = 0) {
+export function getTreeString(node: PageNode, depth = 0) {
   let nodeStr = `${"|  ".repeat(depth)}${node.notionTitle}\n`;
 
   if (node.childNodes?.length) {
