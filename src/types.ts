@@ -11,6 +11,7 @@ export type NotionPage = PageObjectResponse;
 
 // Actual return type of NotionParser.retrievePage
 export type RetrievedPage = {
+  page: PageObjectResponse;
   blocks: { results: BlockChildrenResponseExtended[] };
   mdString: MdStringObject;
   childPages: BlockChildrenResponseExtended[];
