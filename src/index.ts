@@ -21,26 +21,35 @@ export async function generate(config: Config) {
     );
   }
 
+  const plugins = config.plugins ?? [];
+
   // Retrieve the Notion page tree
   const notion = new NotionParser(config.notionToken);
   const pageTree = await buildPageTree(config.notionPageId, notion, {
     cache,
     contentDir: config.contentDir,
     fileExtension: config.fileExtension,
+    plugins,
   });
 
   // Generate the content
   const generator = new Generator({
     fileExtension: config.fileExtension,
-    plugins: config.plugins ?? [],
+    plugins,
   });
-  generator.generateContent(pageTree, config.contentDir);
+  await generator.run(pageTree, config.contentDir);
 
   if (cachePath) {
     saveCache(cachePath, generator.newCache);
-    const { written, skipped, filtered } = generator.stats;
+    const { written, skipped, filtered, errored } = generator.stats;
+    const extras = [
+      filtered ? `${filtered} filtered` : null,
+      errored ? `${errored} errored` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
     console.log(
-      `Done: ${written} written, ${skipped} unchanged${filtered ? `, ${filtered} filtered` : ""}. Cache saved to ${cachePath}`,
+      `Done: ${written} written, ${skipped} unchanged${extras ? `, ${extras}` : ""}. Cache saved to ${cachePath}`,
     );
   }
 }

@@ -15,22 +15,6 @@ Make raw Notion page properties (title, icon, custom properties) available on `P
 
 ---
 
-## Plugin system
-
-### Async hooks
-Allow `filter`, `transform`, and `onFileWritten` hooks to return `Promise<...>`. Required for hooks that call external APIs, upload assets, or run async linters during generation.
-
-### `beforeAll` / `afterAll` hooks
-Hooks that fire once per run, receiving the full page tree. Enables generating `sitemap.json`, search indexes, or a root `_index.md` without a separate post-processing step.
-
-### `onError` hook
-Let plugins handle or suppress per-node errors — e.g. skip a page that fails to parse instead of aborting the entire run.
-
-### Documented `filter` hook recipes
-Common filtering patterns (draft pages via a `Published` property, title-prefix conventions like 🚧, role-based visibility) should be documented as example uses of the existing `filter` hook rather than built into core. The hook already supports this — only docs and examples are needed.
-
----
-
 ## CLI / Developer Experience
 
 ### `--dry-run` flag
