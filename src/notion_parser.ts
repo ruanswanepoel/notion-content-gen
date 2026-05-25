@@ -1,7 +1,15 @@
 import { Client, isFullPage } from "@notionhq/client";
 import { NotionToMarkdown } from "notion-to-md";
 import type { BlockChildrenResponseExtended, RetrievedPage } from "./types.js";
-import type { ListBlockChildrenResponseResults } from "notion-to-md/build/types/index.js";
+import type {
+  ListBlockChildrenResponseResults,
+  MdStringObject,
+} from "notion-to-md/build/types/index.js";
+
+export type RetrievePageOptions = {
+  /** When true, skips the markdown conversion step. Useful for incremental sync. */
+  skipMarkdown?: boolean;
+};
 
 export class NotionParser {
   notionClient: Client;
@@ -22,8 +30,15 @@ export class NotionParser {
 
   /**
    * Retrieves a single Notion page and conveniently converts the content to markdown and finds the child pages.
+   *
+   * Pass `{ skipMarkdown: true }` to skip the conversion step — the returned
+   * `mdString` will be empty. Use {@link convertBlocksToMarkdown} to convert
+   * later if needed.
    */
-  async retrievePage(pageId: string): Promise<RetrievedPage> {
+  async retrievePage(
+    pageId: string,
+    options: RetrievePageOptions = {},
+  ): Promise<RetrievedPage> {
     const [pageResult, blocks] = await Promise.all([
       this.notionClient.pages.retrieve({ page_id: pageId }),
       this.notionClient.blocks.children.list({
@@ -41,11 +56,9 @@ export class NotionParser {
       (page) => page.type == "child_page",
     );
 
-    // Convert to markdown
-    const mdBlocks = await this.n2m.blocksToMarkdown(
-      blocks.results as ListBlockChildrenResponseResults,
-    );
-    const mdString = this.n2m.toMarkdownString(mdBlocks);
+    const mdString: MdStringObject = options.skipMarkdown
+      ? { parent: "" }
+      : await this.convertBlocksToMarkdown(blocks.results);
 
     return {
       page: pageResult,
@@ -55,4 +68,16 @@ export class NotionParser {
     };
   }
 
+  /**
+   * Converts a list of Notion blocks into a markdown string. Exposed so callers
+   * that initially skipped markdown (e.g. incremental sync) can convert later.
+   */
+  async convertBlocksToMarkdown(
+    blocks: BlockChildrenResponseExtended[],
+  ): Promise<MdStringObject> {
+    const mdBlocks = await this.n2m.blocksToMarkdown(
+      blocks as unknown as ListBlockChildrenResponseResults,
+    );
+    return this.n2m.toMarkdownString(mdBlocks);
+  }
 }

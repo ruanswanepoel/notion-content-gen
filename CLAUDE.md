@@ -30,25 +30,36 @@ bin/
     init.ts               Scaffolds a config file
     generate.ts           Thin wrapper: loadConfig() → generate()
 src/
-  index.ts                Orchestrates: builds page tree, then runs generator
+  index.ts                Orchestrates: loads cache, builds page tree, runs generator, saves cache
   notion_parser.ts        Wraps @notionhq/client + notion-to-md (NotionParser class)
-  page_node.ts            Builds the PageNode tree via iterative BFS
-  generator.ts            Writes output files recursively from the tree; runs plugin hooks
+  page_node.ts            Builds the PageNode tree via iterative BFS; resolves output paths and incremental-sync state
+  generator.ts            Writes output files recursively from the tree; runs plugin hooks; reports new cache
+  cache.ts                Load/save the `.notion-content-gen-cache.json` sidecar used for incremental sync
   types.ts                Shared types, ConfigSchema (Zod), Plugin type
-  util.ts                 slugify, parseTitleForExtension, getTreeString, safeStringify, getPackageType
+  util.ts                 slugify, parseTitleForExtension, computeNodeFilePath, getTreeString, safeStringify, getPackageType
 ```
 
 ## How it works
 
 1. `generate` command calls `loadConfig()` → validates config via `ConfigSchema`, merges `plugins` from raw config
-2. `src/index.ts` creates a `NotionParser` and calls `buildPageTree(rootId, notionParser)`
-3. `buildPageTree` uses an iterative BFS queue — each node fetches its page content and child pages via `notionParser.retrievePage()`
+2. `src/index.ts` loads the cache (if enabled), creates a `NotionParser`, then calls `buildPageTree(rootId, notionParser, { cache, contentDir, fileExtension })`
+3. `buildPageTree` uses an iterative BFS queue — each node fetches its page content and child pages via `notionParser.retrievePage()`. When a cache is provided, retrieval skips markdown conversion, resolves the expected output path, and marks the node `unchanged` if `last_edited_time` + path match the cache and the file still exists. Otherwise the markdown is converted in-place.
 4. `Generator.generateContent()` recurses the tree, applying plugin hooks at each node:
    - `filter` hooks run first — returning `false` skips the node and its children
    - Leaf pages → `slug.md` (or title-derived extension if the page title includes one)
    - Pages with children → `slug/index.md`
+   - `unchanged` nodes with an existing output file are not rewritten (their plugin `transform`/`onFileWritten` hooks are also skipped)
    - `transform` hooks modify the markdown string before writing
    - `onFileWritten` hooks fire after each file is written
+5. After generation, the fresh cache built by the Generator is written back to the sidecar JSON file. Entries for pages that no longer exist are implicitly pruned.
+
+## Incremental sync
+
+When enabled (default), a JSON sidecar file (`.notion-content-gen-cache.json` in `cwd` by default) records each page's `last_edited_time` and resolved output `filePath` between runs. On the next run, pages whose `last_edited_time` and target path are unchanged and whose output file still exists are skipped — no markdown conversion, no file write.
+
+- Toggle via the `cache` config option: `true` (default), `false` (disable), or a string path (custom cache file location).
+- The cache file should typically be gitignored locally but persisted between CI runs (e.g. via the CI's cache action) to keep generation fast.
+- Cache misses (missing entry, mismatching `last_edited_time`, mismatching path, missing output file, or version bump) fall back to a full sync for that page.
 
 ## Plugin system
 
@@ -93,6 +104,7 @@ const config: Config = {
   notionPageId: "<root-page-id>",
   contentDir: "content",        // output directory, defaults to "content"
   fileExtension: "md",          // default file extension, defaults to "md"
+  cache: true,                  // incremental sync; true (default), false, or custom path
   plugins: [
     {
       name: "my-plugin",

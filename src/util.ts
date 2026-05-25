@@ -1,6 +1,6 @@
 import type { PageNode } from "./page_node.js";
 import { readFileSync } from "fs";
-import { join } from "path";
+import path, { join } from "path";
 
 export function safeStringify(obj: object) {
   const seen = new WeakSet();
@@ -53,6 +53,30 @@ export function parseTitleForExtension(title: string): {
     return { baseName: match[1]!, ext: match[2]! };
   }
   return { baseName: title, ext: null };
+}
+
+/**
+ * Computes the output file path and child directory for a page based on its
+ * title, parent directory, whether it has children, and the default extension.
+ *
+ * Mirrors the resolution rules used by the Generator so they can be applied
+ * up front during tree construction (e.g. for cache lookups).
+ */
+export function computeNodeFilePath(
+  title: string,
+  parentDir: string,
+  hasChildren: boolean,
+  defaultExtension: string,
+): { filePath: string; childDir: string } {
+  const { baseName, ext } = parseTitleForExtension(title);
+  const isLeaf = !hasChildren;
+  const resolvedExt = isLeaf && ext ? ext : defaultExtension;
+  const slug = ext ? baseName : slugify(title);
+  const childDir = path.join(parentDir, slug);
+  const filePath = isLeaf
+    ? path.join(parentDir, `${slug}.${resolvedExt}`)
+    : path.join(childDir, `index.${resolvedExt}`);
+  return { filePath, childDir };
 }
 
 export function getPackageType(cwd = process.cwd()): "module" | "commonjs" {

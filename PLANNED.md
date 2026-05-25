@@ -13,9 +13,6 @@ Guiding principles (from [CLAUDE.md](CLAUDE.md)):
 ### Expose Notion page properties on `PageNode`
 Make raw Notion page properties (title, icon, custom properties) available on `PageNode` so plugins and presets have the data they need. This is the foundation for any preset that wants to inject frontmatter or filter by property value — the core tool itself does not write frontmatter.
 
-### Incremental sync
-Cache `last_edited_time` per page (simple JSON sidecar file) and skip pages that haven't changed since the last run. Reduces Notion API usage and speeds up generation significantly for large page trees.
-
 ---
 
 ## Plugin system

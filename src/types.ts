@@ -74,6 +74,7 @@ export const ConfigSchema = z.object({
   notionPageId: z.string().min(1, "notionPageId is required"),
   contentDir: z.string().default("content"),
   fileExtension: z.string().default("md"),
+  cache: z.union([z.boolean(), z.string()]).default(true),
 });
 
 export type Config = z.infer<typeof ConfigSchema> & {

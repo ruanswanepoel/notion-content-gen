@@ -1,49 +1,80 @@
 import fs from "fs";
 import path from "path";
-import { slugify, parseTitleForExtension } from "./util.js";
+import { computeNodeFilePath } from "./util.js";
 import type { PageNode } from "./page_node.js";
 import type { Plugin } from "./types.js";
+import { emptyCache, type CacheData } from "./cache.js";
 
 type GeneratorConfig = {
   fileExtension?: string;
   plugins?: Plugin[];
 };
 
+export type GenerationStats = {
+  written: number;
+  skipped: number;
+  filtered: number;
+};
+
 export class Generator {
   config: Required<GeneratorConfig>;
+  newCache: CacheData = emptyCache();
+  stats: GenerationStats = { written: 0, skipped: 0, filtered: 0 };
 
   constructor({ fileExtension = "md", plugins = [] }: GeneratorConfig) {
     this.config = { fileExtension, plugins };
   }
 
   generateContent(node: PageNode, dir: string) {
-    if (!this.runFilter(node)) return;
-
-    const { baseName, ext } = parseTitleForExtension(node.notionTitle);
-    const isLeaf = node.childNodes.length === 0;
-
-    // Title-based extension only applies to leaf files
-    const resolvedExt = isLeaf && ext ? ext : this.config.fileExtension;
-    const slug = ext ? baseName : slugify(node.notionTitle);
-    const newDir = path.join(dir, slug);
-
-    let filePath: string;
-    if (isLeaf) {
-      filePath = path.join(dir, `${slug}.${resolvedExt}`);
-    } else {
-      filePath = path.join(newDir, `index.${resolvedExt}`);
-      if (!fs.existsSync(newDir)) {
-        fs.mkdirSync(newDir, { recursive: true });
-      }
+    if (!this.runFilter(node)) {
+      this.stats.filtered++;
+      return;
     }
 
-    const raw = node.notionPage?.mdString?.parent ?? "";
-    const content = this.runTransform(raw, node);
-    fs.writeFileSync(filePath, content);
-    this.runOnFileWritten(filePath, node);
+    // Prefer the path resolved during tree build; fall back to recomputing in
+    // case the tree was built without it.
+    let filePath = node.filePath;
+    let childDir = node.childDir;
+    if (!filePath || !childDir) {
+      const resolved = computeNodeFilePath(
+        node.notionTitle,
+        dir,
+        node.childNodes.length > 0,
+        this.config.fileExtension,
+      );
+      filePath = resolved.filePath;
+      childDir = resolved.childDir;
+    }
+
+    const isLeaf = node.childNodes.length === 0;
+    if (!isLeaf && !fs.existsSync(childDir)) {
+      fs.mkdirSync(childDir, { recursive: true });
+    }
+
+    const lastEditedTime = node.notionPage?.page?.last_edited_time;
+    const canSkipWrite = node.unchanged && fs.existsSync(filePath);
+
+    if (canSkipWrite) {
+      this.stats.skipped++;
+    } else {
+      const raw = node.notionPage?.mdString?.parent ?? "";
+      const content = this.runTransform(raw, node);
+      // Ensure the parent directory exists for leaf files too.
+      const parentDir = path.dirname(filePath);
+      if (!fs.existsSync(parentDir)) {
+        fs.mkdirSync(parentDir, { recursive: true });
+      }
+      fs.writeFileSync(filePath, content);
+      this.runOnFileWritten(filePath, node);
+      this.stats.written++;
+    }
+
+    if (lastEditedTime) {
+      this.newCache.pages[node.notionId] = { lastEditedTime, filePath };
+    }
 
     for (const child of node.childNodes) {
-      this.generateContent(child, newDir);
+      this.generateContent(child, childDir);
     }
   }
 
