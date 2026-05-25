@@ -15,16 +15,6 @@ Make raw Notion page properties (title, icon, custom properties) available on `P
 
 ---
 
-## CLI / Developer Experience
-
-### `--dry-run` flag
-Print which files would be written, updated, or deleted without touching disk. Essential for previewing changes in CI before committing output.
-
-### `--verbose` / structured logging
-Log level flag with human-readable or JSON-structured output. Useful for debugging large trees, slow fetches, and plugin behaviour in CI pipelines.
-
----
-
 ## First-party plugins (ship in-tree)
 
 Plugins maintained alongside the core package, imported from `notion-content-gen/plugins/*`. They use the same hook API as user plugins — no special access — but live in-tree so they version with the core and serve as canonical examples.
@@ -34,43 +24,10 @@ Download images and files from Notion's CDN (which serves expiring URLs) and rew
 
 ---
 
-## SSG Adapters / Presets (ship in-tree)
-
-Presets are bundles of plugins and config defaults imported from `notion-content-gen/presets/*`. They ship in-tree so they version with the core; if a downstream framework (e.g. Fumadocs) changes its conventions, a single coordinated release updates the preset.
-
-### Frontmatter (general pattern)
-Presets and plugins construct and inject frontmatter using Notion page properties exposed on `PageNode` via the `transform` hook. No built-in frontmatter format — the shape is entirely up to the preset or plugin.
-
-### `fumadocs` preset
-A named adapter that wires up all Fumadocs-specific behaviour in one import:
-- YAML frontmatter (`title`, `description`, `icon`, `full`)
-- `_meta.json` generation per directory (preserving Notion's page order for sidebar navigation)
-- MDX block transformations (see below)
-- Draft filtering via Notion properties
-
-```ts
-import { fumadocsPreset } from "notion-content-gen/presets/fumadocs";
-```
-
-### MDX block transformations (Fumadocs / MDX consumers)
-Opt-in mappings from Notion block types to MDX components, used by the `fumadocs` preset and available to other MDX-based consumers:
-- Notion callout → `<Callout type="info|warn|error">`
-- Notion toggle → `<Accordion>` / `<Accordions>`
-- Notion columns → layout component
-
----
-
 ## Config
 
 ### Multiple roots
 Accept an array of `notionPageId` entries in config, each with its own `contentDir`. Enables multi-section sites (e.g. `docs/` from one Notion workspace, `blog/` from another) in a single run.
-
----
-
-## Local development (not CI)
-
-### `watch` command
-Re-run generation on a filesystem signal or short timer for local development. Pairs with incremental sync to refetch only changed pages. **Explicitly a dev-mode feature** — CI uses `generate` once at build time. Features added here should not creep into CI workflows.
 
 ---
 

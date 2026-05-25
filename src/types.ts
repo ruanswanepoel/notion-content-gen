@@ -58,6 +58,11 @@ export type BlockChildrenResponseExtended = {
 
 // Plugin system
 import type { PageNode } from "./page_node.js";
+import type { NotionParser } from "./notion_parser.js";
+
+export type SetupContext = {
+  notion: NotionParser;
+};
 
 /**
  * onError handlers return `true` to suppress the error and continue. Any other
@@ -71,6 +76,8 @@ import type { PageNode } from "./page_node.js";
 export type Plugin = {
   name: string;
   hooks?: {
+    /** Fires once before any Notion API call. Use to register custom n2m transformers, etc. */
+    setup?: (ctx: SetupContext) => void | Promise<void>;
     /** Fires once before generation starts, after the page tree is built. */
     beforeAll?: (tree: PageNode) => void | Promise<void>;
     /** Fires once after all files have been written. */

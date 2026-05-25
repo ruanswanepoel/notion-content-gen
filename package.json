@@ -5,6 +5,34 @@
   "bin": {
     "notion-content-gen": "./dist/bin/cli.js"
   },
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./types": {
+      "types": "./dist/src/types.d.ts",
+      "default": "./dist/src/types.js"
+    },
+    "./plugins/frontmatter": {
+      "types": "./dist/src/plugins/frontmatter.d.ts",
+      "default": "./dist/src/plugins/frontmatter.js"
+    },
+    "./plugins/mdx-blocks": {
+      "types": "./dist/src/plugins/mdx_blocks.d.ts",
+      "default": "./dist/src/plugins/mdx_blocks.js"
+    },
+    "./presets/fumadocs": {
+      "types": "./dist/src/presets/fumadocs.d.ts",
+      "default": "./dist/src/presets/fumadocs.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "check": "tsc --noEmit",
     "build": "tsc",

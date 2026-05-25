@@ -4,10 +4,13 @@ import { computeNodeFilePath } from "./util.js";
 import type { PageNode } from "./page_node.js";
 import type { Plugin } from "./types.js";
 import { emptyCache, type CacheData } from "./cache.js";
+import { Logger } from "./logger.js";
 
 type GeneratorConfig = {
   fileExtension?: string;
   plugins?: Plugin[];
+  dryRun?: boolean;
+  logger?: Logger;
 };
 
 export type GenerationStats = {
@@ -15,29 +18,41 @@ export type GenerationStats = {
   skipped: number;
   filtered: number;
   errored: number;
+  created: number;
+  updated: number;
 };
 
 export class Generator {
-  config: Required<GeneratorConfig>;
+  config: Required<Omit<GeneratorConfig, "logger">> & { logger: Logger };
   newCache: CacheData = emptyCache();
   stats: GenerationStats = {
     written: 0,
     skipped: 0,
     filtered: 0,
     errored: 0,
+    created: 0,
+    updated: 0,
   };
 
-  constructor({ fileExtension = "md", plugins = [] }: GeneratorConfig) {
-    this.config = { fileExtension, plugins };
+  constructor({
+    fileExtension = "md",
+    plugins = [],
+    dryRun = false,
+    logger = new Logger(),
+  }: GeneratorConfig) {
+    this.config = { fileExtension, plugins, dryRun, logger };
   }
 
   /**
    * Runs the full generation lifecycle: beforeAll → generateContent → afterAll.
+   * In dry-run mode, `afterAll` is skipped because such hooks commonly write
+   * sidecar artifacts to disk (e.g. `_meta.json`) which would defeat the
+   * "don't touch disk" guarantee.
    */
   async run(rootNode: PageNode, contentDir: string): Promise<void> {
     await this.runBeforeAll(rootNode);
     await this.generateContent(rootNode, contentDir);
-    await this.runAfterAll(rootNode);
+    if (!this.config.dryRun) await this.runAfterAll(rootNode);
   }
 
   async generateContent(node: PageNode, dir: string): Promise<void> {
@@ -69,7 +84,7 @@ export class Generator {
     }
 
     const isLeaf = node.childNodes.length === 0;
-    if (!isLeaf && !fs.existsSync(childDir)) {
+    if (!isLeaf && !fs.existsSync(childDir) && !this.config.dryRun) {
       fs.mkdirSync(childDir, { recursive: true });
     }
 
@@ -79,16 +94,31 @@ export class Generator {
     let wroteOk = true;
     if (canSkipWrite) {
       this.stats.skipped++;
+      this.config.logger.debug(`unchanged: ${filePath}`);
     } else {
       try {
         const raw = node.notionPage?.mdString?.parent ?? "";
         const content = await this.runTransform(raw, node);
-        const parentDir = path.dirname(filePath);
-        if (!fs.existsSync(parentDir)) {
-          fs.mkdirSync(parentDir, { recursive: true });
+        const existed = fs.existsSync(filePath);
+
+        if (this.config.dryRun) {
+          this.config.logger.info(
+            `[dry-run] would ${existed ? "update" : "create"}: ${filePath}`,
+          );
+        } else {
+          const parentDir = path.dirname(filePath);
+          if (!fs.existsSync(parentDir)) {
+            fs.mkdirSync(parentDir, { recursive: true });
+          }
+          fs.writeFileSync(filePath, content);
+          await this.runOnFileWritten(filePath, node);
+          this.config.logger.debug(
+            `${existed ? "updated" : "created"}: ${filePath}`,
+          );
         }
-        fs.writeFileSync(filePath, content);
-        await this.runOnFileWritten(filePath, node);
+
+        if (existed) this.stats.updated++;
+        else this.stats.created++;
         this.stats.written++;
       } catch (err) {
         if (!(await this.runOnError(err, node))) throw err;
