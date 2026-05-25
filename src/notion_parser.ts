@@ -1,6 +1,6 @@
 import { Client } from "@notionhq/client";
 import { NotionToMarkdown } from "notion-to-md";
-import type { BlockChildrenResponseExtended, NotionPage } from "./types.js";
+import type { BlockChildrenResponseExtended, RetrievedPage } from "./types.js";
 import type { ListBlockChildrenResponseResults } from "notion-to-md/build/types/index.js";
 
 export class NotionParser {
@@ -23,7 +23,7 @@ export class NotionParser {
   /**
    * Retrieves a single Notion page and conveniently converts the content to markdown and finds the child pages.
    */
-  async retrievePage(pageId: string): NotionPage {
+  async retrievePage(pageId: string): Promise<RetrievedPage> {
     const blocks = (await this.notionClient.blocks.children.list({
       block_id: pageId,
     })) as unknown as { results: BlockChildrenResponseExtended[] };
@@ -45,5 +45,4 @@ export class NotionParser {
     };
   }
 
-  async parsePage
 }

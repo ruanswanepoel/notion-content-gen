@@ -1,43 +1,67 @@
 import fs from "fs";
 import path from "path";
-import { slugify } from "./util.js";
+import { slugify, parseTitleForExtension } from "./util.js";
 import type { PageNode } from "./page_node.js";
+import type { Plugin } from "./types.js";
 
 type GeneratorConfig = {
-  condition?: (node: PageNode) => boolean;
+  fileExtension?: string;
+  plugins?: Plugin[];
 };
 
 export class Generator {
-  config: GeneratorConfig;
+  config: Required<GeneratorConfig>;
 
-  constructor({ condition = () => true }: GeneratorConfig) {
-    this.config = { condition };
+  constructor({ fileExtension = "md", plugins = [] }: GeneratorConfig) {
+    this.config = { fileExtension, plugins };
   }
 
-  /**
-   * Generates the content (page tree and markdown files) for the given node in the specified directory.
-   */
   generateContent(node: PageNode, dir: string) {
-    const nodeSlug = slugify(node.notionTitle);
-    const newDir = path.join(dir, nodeSlug); // Only relevant if there are childNodes
-    let filePath = path.join(dir, `${nodeSlug}.mdx`); // Default filePath, may change if there are childNodes
+    if (!this.runFilter(node)) return;
 
-    if (node.childNodes.length) {
-      filePath = path.join(newDir, "index.mdx");
+    const { baseName, ext } = parseTitleForExtension(node.notionTitle);
+    const isLeaf = node.childNodes.length === 0;
 
+    // Title-based extension only applies to leaf files
+    const resolvedExt = isLeaf && ext ? ext : this.config.fileExtension;
+    const slug = ext ? baseName : slugify(node.notionTitle);
+    const newDir = path.join(dir, slug);
+
+    let filePath: string;
+    if (isLeaf) {
+      filePath = path.join(dir, `${slug}.${resolvedExt}`);
+    } else {
+      filePath = path.join(newDir, `index.${resolvedExt}`);
       if (!fs.existsSync(newDir)) {
         fs.mkdirSync(newDir, { recursive: true });
       }
     }
 
-    // Create the currunt node content
-    fs.writeFileSync(filePath, node.notionPage?.mdString?.parent || "");
+    const raw = node.notionPage?.mdString?.parent ?? "";
+    const content = this.runTransform(raw, node);
+    fs.writeFileSync(filePath, content);
+    this.runOnFileWritten(filePath, node);
 
-    // Recursively generate child nodes
-    if (node.childNodes) {
-      for (let cn of node.childNodes) {
-        this.generateContent(cn, newDir);
-      }
+    for (const child of node.childNodes) {
+      this.generateContent(child, newDir);
+    }
+  }
+
+  private runFilter(node: PageNode): boolean {
+    return this.config.plugins.every(
+      (plugin) => plugin.hooks?.filter?.(node) ?? true,
+    );
+  }
+
+  private runTransform(content: string, node: PageNode): string {
+    return this.config.plugins.reduce((acc, plugin) => {
+      return plugin.hooks?.transform?.(acc, node) ?? acc;
+    }, content);
+  }
+
+  private runOnFileWritten(filePath: string, node: PageNode): void {
+    for (const plugin of this.config.plugins) {
+      plugin.hooks?.onFileWritten?.(filePath, node);
     }
   }
 }

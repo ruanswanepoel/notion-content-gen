@@ -40,6 +40,21 @@ export function getTreeString(node: PageNode, depth = 0) {
   return nodeStr;
 }
 
+/**
+ * If the title ends with a file extension (e.g. "meta.json"), returns the base name and extension separately.
+ * Otherwise returns the original title with a null extension, leaving slugification to the caller.
+ */
+export function parseTitleForExtension(title: string): {
+  baseName: string;
+  ext: string | null;
+} {
+  const match = title.match(/^(.+)\.([a-zA-Z0-9]+)$/);
+  if (match) {
+    return { baseName: match[1]!, ext: match[2]! };
+  }
+  return { baseName: title, ext: null };
+}
+
 export function getPackageType(cwd = process.cwd()): "module" | "commonjs" {
   try {
     const pkg = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));

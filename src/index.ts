@@ -1,6 +1,6 @@
 import { Generator } from "./generator.js";
 import { buildPageTree } from "./page_node.js";
-import { Notion } from "./notion.js";
+import { NotionParser } from "./notion_parser.js";
 import type { Config } from "./types.js";
 
 export async function generate(config: Config) {
@@ -10,11 +10,13 @@ export async function generate(config: Config) {
   );
 
   // Retrieve the Notion page tree
-  const notion = new Notion(config.notionToken);
+  const notion = new NotionParser(config.notionToken);
   const pageTree = await buildPageTree(config.notionPageId, notion);
 
   // Generate the content
-  const generator = new Generator();
+  const generator = new Generator({
+    fileExtension: config.fileExtension,
+    plugins: config.plugins ?? [],
+  });
   generator.generateContent(pageTree, config.contentDir);
-  // writeMarkdownPageTree(pageTree, config.contentDir);
 }

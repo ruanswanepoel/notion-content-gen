@@ -1,9 +1,20 @@
-import type { BlockObjectResponse, PageObjectResponse } from "@notionhq/client";
+import type {
+  BlockObjectResponse,
+  PageObjectResponse,
+} from "@notionhq/client";
+import type { MdStringObject } from "notion-to-md/build/types/index.js";
 import z from "zod";
 
 // Notion types
 export type NotionBlock = BlockObjectResponse;
 export type NotionPage = PageObjectResponse;
+
+// Actual return type of NotionParser.retrievePage
+export type RetrievedPage = {
+  blocks: { results: BlockChildrenResponseExtended[] };
+  mdString: MdStringObject;
+  childPages: BlockChildrenResponseExtended[];
+};
 
 // Extended Notion types
 /// Represents the metadata in a Notion page
@@ -44,11 +55,26 @@ export type BlockChildrenResponseExtended = {
   };
 };
 
+// Plugin system
+import type { PageNode } from "./page_node.js";
+
+export type Plugin = {
+  name: string;
+  hooks?: {
+    filter?: (node: PageNode) => boolean;
+    transform?: (content: string, node: PageNode) => string;
+    onFileWritten?: (filePath: string, node: PageNode) => void;
+  };
+};
+
 // External Config
 export const ConfigSchema = z.object({
   notionToken: z.string().min(1, "notionToken is required"),
   notionPageId: z.string().min(1, "notionPageId is required"),
   contentDir: z.string().default("content"),
+  fileExtension: z.string().default("md"),
 });
 
-export type Config = z.infer<typeof ConfigSchema>;
+export type Config = z.infer<typeof ConfigSchema> & {
+  plugins?: Plugin[];
+};

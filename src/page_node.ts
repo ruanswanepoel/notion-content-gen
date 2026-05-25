@@ -1,4 +1,4 @@
-import type { Notion } from "./notion.js";
+import type { NotionParser } from "./notion_parser.js";
 import type { BlockChildrenResponseExtended } from "./types.js";
 
 /**
@@ -9,7 +9,7 @@ export type PageNode = {
   notionTitle: string;
   notionPage:
     | ({ metadata?: BlockChildrenResponseExtended } & Partial<
-        Awaited<ReturnType<typeof Notion.prototype.retrievePage>>
+        Awaited<ReturnType<typeof NotionParser.prototype.retrievePage>>
       >)
     | null;
   parentNode: PageNode | null;
@@ -19,7 +19,7 @@ export type PageNode = {
 /**
  * Builds the page/node tree according to the layout in Notion, starting from the given root page ID.
  */
-export async function buildPageTree(rootId: string, notion: Notion) {
+export async function buildPageTree(rootId: string, notion: NotionParser) {
   const rootNode: PageNode = {
     notionId: rootId,
     notionTitle: "Root",

@@ -41,5 +41,8 @@ export async function loadConfig() {
     process.exit(1);
   }
 
-  return parsed.data;
+  return {
+    ...parsed.data,
+    plugins: Array.isArray(rawConfig.plugins) ? rawConfig.plugins : [],
+  };
 }
