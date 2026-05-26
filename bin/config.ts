@@ -11,7 +11,17 @@ const CONFIG_FILES = [
   "notion-content-gen.json",
 ];
 
-export async function loadConfig() {
+export type LoadConfigOptions = {
+  /**
+   * When true, append a unique query string to the import URL so Node's ESM
+   * loader re-evaluates the config module instead of returning the cached
+   * copy. Used by watch mode to pick up edits to the config or its plugin
+   * files without restarting the process.
+   */
+  bustCache?: boolean;
+};
+
+export async function loadConfig(options: LoadConfigOptions = {}) {
   const cwd = process.cwd();
 
   const configFile = CONFIG_FILES.map((file) => path.join(cwd, file)).find(
@@ -29,7 +39,10 @@ export async function loadConfig() {
   if (configFile.endsWith(".json")) {
     rawConfig = JSON.parse(fs.readFileSync(configFile, "utf-8"));
   } else {
-    const imported = await import(pathToFileURL(configFile).href);
+    const url = options.bustCache
+      ? `${pathToFileURL(configFile).href}?v=${Date.now()}`
+      : pathToFileURL(configFile).href;
+    const imported = await import(url);
     rawConfig = imported.default ?? imported;
   }
 

@@ -9,6 +9,7 @@ import {
 } from "./cache.js";
 import { Logger } from "./logger.js";
 import type { Config } from "./types.js";
+import { getTreeString } from "./util.js";
 
 export type GenerateOptions = {
   /** When true, no files are written and no cache is saved. */
@@ -49,7 +50,7 @@ export async function generate(config: Config, options: GenerateOptions = {}) {
 
   // Run setup hooks (e.g. n2m custom transformers) before any Notion call.
   for (const plugin of plugins) {
-    await plugin.hooks?.setup?.({ notion });
+    await plugin.hooks?.setup?.({ notion, dryRun, logger });
   }
 
   const pageTree = await buildPageTree(config.notionPageId, notion, {
@@ -60,6 +61,8 @@ export async function generate(config: Config, options: GenerateOptions = {}) {
     concurrency: config.concurrency,
     logger,
   });
+
+  logger.debug(`Page tree:\n${getTreeString(pageTree)}`);
 
   // Generate the content
   const generator = new Generator({
@@ -139,5 +142,22 @@ export async function generate(config: Config, options: GenerateOptions = {}) {
   return { ...generator.stats, removed: cleanupResult.removed.length };
 }
 
+// Public API surface — plugin authors and programmatic callers should be able
+// to get everything they need from `notion-content-gen` without reaching into
+// subpath imports.
 export { Logger } from "./logger.js";
 export type { LogLevel, LogFormat } from "./logger.js";
+export { NotionParser } from "./notion_parser.js";
+export { getProperty, type PageNode } from "./page_node.js";
+export type {
+  Config,
+  Plugin,
+  LifecycleContext,
+  SetupContext,
+  NotionPage,
+  NotionBlock,
+  NotionChildPageBlock,
+  NotionPageProperty,
+  RetrievedPage,
+} from "./types.js";
+export type { GenerationStats } from "./generator.js";

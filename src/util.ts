@@ -2,23 +2,6 @@ import type { PageNode } from "./page_node.js";
 import { readFileSync } from "fs";
 import path, { join } from "path";
 
-export function safeStringify(obj: object) {
-  const seen = new WeakSet();
-  return JSON.stringify(
-    obj,
-    (key, value) => {
-      if (typeof value === "object" && value !== null) {
-        if (seen.has(value)) {
-          return "[Circular]"; // or null, or skip
-        }
-        seen.add(value);
-      }
-      return value;
-    },
-    4,
-  );
-}
-
 export function slugify(str: string) {
   return str
     .toLowerCase()
@@ -28,8 +11,13 @@ export function slugify(str: string) {
     .replace(/^-+|-+$/g, ""); // trim hyphens
 }
 
+/**
+ * Renders a `PageNode` tree as an indented string for debug output. Filtered
+ * nodes are marked with a trailing `(filtered)`.
+ */
 export function getTreeString(node: PageNode, depth = 0) {
-  let nodeStr = `${"|  ".repeat(depth)}${node.notionTitle}\n`;
+  const marker = node.filtered ? " (filtered)" : "";
+  let nodeStr = `${"|  ".repeat(depth)}${node.notionTitle}${marker}\n`;
 
   if (node.childNodes?.length) {
     for (const cn of node.childNodes) {
@@ -86,4 +74,31 @@ export function getPackageType(cwd = process.cwd()): "module" | "commonjs" {
   } catch {
     return "commonjs"; // Node default
   }
+}
+
+/**
+ * Reads a `version` field from this package's own package.json. Used by the
+ * CLI to keep `--version` in lockstep with the published version.
+ *
+ * Falls back to `"0.0.0"` if the file can't be located (e.g. when running
+ * from an unusual layout).
+ */
+export function getOwnPackageVersion(currentFile: string): string {
+  // Walk up from the calling file looking for the nearest package.json.
+  let dir = path.dirname(currentFile);
+  for (let i = 0; i < 6; i++) {
+    const candidate = path.join(dir, "package.json");
+    try {
+      const pkg = JSON.parse(readFileSync(candidate, "utf8"));
+      if (pkg.name === "notion-content-gen" && typeof pkg.version === "string") {
+        return pkg.version;
+      }
+    } catch {
+      /* try parent */
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return "0.0.0";
 }

@@ -90,6 +90,8 @@ notion-content-gen watch [--interval <seconds>] [--dry-run] [--verbose] [--log-f
 
 Re-runs `generate` on a timer for local development. Pairs with incremental sync so subsequent runs only refetch changed pages. **Not intended for CI** — CI should call `generate` once at build time. `--interval` defaults to `30` seconds; minimum is `1`. Generation errors are logged but do not exit the loop. Ctrl+C (SIGINT/SIGTERM) stops cleanly.
 
+In addition to the timer, watch mode tracks the active config file (`notion-content-gen.config.{ts,js,json}`) plus any local plugin files referenced through relative imports in the config. Saving any of those files triggers an immediate re-run — useful when iterating on a `transform` or `filter` hook without restarting the process. The ESM module cache is busted on each reload so edits actually take effect.
+
 ### Programmatic API
 
 ```ts
@@ -111,9 +113,9 @@ Plugins are objects with optional hook functions, defined in the config file:
 type Plugin = {
   name: string;
   hooks?: {
-    setup?: (ctx: { notion: NotionParser }) => void | Promise<void>;
-    beforeAll?: (tree: PageNode) => void | Promise<void>;
-    afterAll?: (tree: PageNode) => void | Promise<void>;
+    setup?: (ctx: { notion: NotionParser; dryRun: boolean; logger: Logger }) => void | Promise<void>;
+    beforeAll?: (tree: PageNode, ctx: { dryRun: boolean; logger: Logger }) => void | Promise<void>;
+    afterAll?: (tree: PageNode, ctx: { dryRun: boolean; logger: Logger }) => void | Promise<void>;
     filter?: (node: PageNode) => boolean | Promise<boolean>;
     transform?: (content: string, node: PageNode) => string | Promise<string>;
     onFileWritten?: (filePath: string, node: PageNode) => void | Promise<void>;
@@ -127,17 +129,75 @@ type Plugin = {
 
 Plugins are passed through as-is from the config file (not Zod-validated, since functions aren't serialisable). `bin/config.ts` reads `rawConfig.plugins` after Zod validation and merges it into the returned config.
 
+### `PageNode` shape
+
+Notion page data is promoted to first-class fields on the node — plugins do
+not need to reach through nested optional chaining:
+
+```ts
+type PageNode = {
+  notionId: string;
+  notionTitle: string;                            // updated from the fetched page on the root
+  page: PageObjectResponse | null;
+  properties: PageObjectResponse["properties"] | null;
+  icon: PageObjectResponse["icon"] | null;
+  lastEditedTime: string | null;
+  blocks: BlockObjectResponse[];
+  mdString: string;
+  childPageBlock: ChildPageBlockObjectResponse | null;
+  parentNode: PageNode | null;
+  childNodes: PageNode[];
+  filePath?: string;
+  childDir?: string;
+  unchanged?: boolean;
+  resolvedTitle?: string;
+  filtered?: boolean;
+};
+```
+
+Use `getProperty(node, name)` (exported from `notion-content-gen`) to look up
+a Notion property by name. It returns the raw typed property object (with its
+`type` discriminator) so callers can narrow:
+
+```ts
+import { getProperty } from "notion-content-gen";
+
+const prop = getProperty(node, "Description");
+if (prop?.type === "rich_text") {
+  const text = prop.rich_text.map((r) => r.plain_text).join("");
+}
+```
+
+The synthetic root node starts with `notionTitle = "Root"` and is overwritten
+with the fetched page's title once Notion responds. Its `parentNode` is
+always `null`, which is the canonical way for presets to detect the root and
+opt out of frontmatter / sidebar entries.
+
 ### Hooks reference
 
-- **`setup({ notion })`** — runs once before any Notion API call. Use this to register `notion-to-md` custom transformers, prime caches, or otherwise configure the parser. Plugins run sequentially in declaration order.
-- **`beforeAll(tree)`** — runs once after the page tree is built, before any file is written. Useful for tree-wide setup (caches, indexes, validating expected pages).
-- **`afterAll(tree)`** — runs once after the last file is written. Useful for sidecar artifacts like `sitemap.json`, search indexes, or a root `_index.md`.
-- **`filter(node)`** — returning `false` skips the node and its descendants. First plugin to return `false` wins.
+- **`setup({ notion, dryRun, logger })`** — runs once before any Notion API call. Use this to register `notion-to-md` custom transformers, prime caches, or otherwise configure the parser. Plugins run sequentially in declaration order.
+- **`beforeAll(tree, ctx)`** — runs once after the page tree is built, before any file is written. Useful for tree-wide setup (caches, indexes, validating expected pages). `ctx` is `{ dryRun, logger }`.
+- **`afterAll(tree, ctx)`** — runs once after the last file is written, *in dry-run mode too* so plugins can run validation. Plugins that write sidecar artifacts (e.g. `_meta.json`) should guard on `ctx.dryRun`.
+- **`filter(node)`** — runs *during tree build*, immediately after the page is fetched. Returning `false` skips the node and its descendants — neither the subtree's markdown conversion nor its child fetches happen. The Generator honors the build-time decision; it does not re-invoke `filter`. First plugin to return `false` wins.
 - **`transform(content, node)`** — pipeline: each plugin receives the previous plugin's output. Use for frontmatter injection, block transformations, etc.
-- **`onFileWritten(filePath, node)`** — fires once per successful write.
-- **`onError(err, node)`** — fires when a per-node error occurs during tree build (parse/retrieval) or generation (filter/write/transform/onFileWritten). Return `true` to suppress the error and continue. All `onError` handlers see every error — they don't short-circuit.
+- **`onFileWritten(filePath, node)`** — fires once per successful write. Skipped in dry-run.
+- **`onError(err, node)`** — fires when a per-node error occurs during tree build (parse/retrieval) or generation (write/transform/onFileWritten). Return `true` to suppress the error and continue. All `onError` handlers see every error — they don't short-circuit. **Note:** when generation suppresses a write error on a non-leaf node, the node's children are also skipped — the parent `index` is missing so the directory would be broken downstream.
 
 All hooks may return promises; the runner awaits them in plugin order.
+
+### Hook ordering in presets
+
+Plugins fire in config-declaration order. Presets that return `Plugin[]`
+(like `fumadocsPreset`) put the user's plugins before or after the preset's
+depending on spread position:
+
+```ts
+plugins: [...fumadocsPreset(), myPlugin]   // myPlugin runs after preset (sees its frontmatter)
+plugins: [myPlugin, ...fumadocsPreset()]   // myPlugin runs first (preset wraps its output)
+```
+
+Worth keeping in mind when writing a `transform` that should run before or
+after frontmatter injection.
 
 ### `filter` hook recipes
 
@@ -145,13 +205,15 @@ The built-in `filter` hook is expressive enough to cover common gating patterns
 without dedicated config. A few canonical examples:
 
 ```ts
+import { getProperty } from "notion-content-gen";
+
 // Hide pages flagged via a Notion `Published` checkbox property
 {
   name: "drafts",
   hooks: {
     filter: (node) => {
-      const props = node.notionPage?.page?.properties as any;
-      return props?.Published?.checkbox !== false;
+      const prop = getProperty(node, "Published");
+      return prop?.type !== "checkbox" || prop.checkbox !== false;
     },
   },
 }
@@ -169,10 +231,9 @@ without dedicated config. A few canonical examples:
   name: "audience",
   hooks: {
     filter: (node) => {
-      const props = node.notionPage?.page?.properties as any;
-      const tags: string[] =
-        props?.Audience?.multi_select?.map((t: any) => t.name) ?? [];
-      return tags.includes("public");
+      const prop = getProperty(node, "Audience");
+      if (prop?.type !== "multi_select") return true;
+      return prop.multi_select.some((t) => t.name === "public");
     },
   },
 }
@@ -243,26 +304,22 @@ export default {
 The preset returns a `Plugin[]`, so callers can spread it alongside their own
 plugins, reorder, or drop individual entries.
 
-## Incomplete / not yet wired up
-
-### `NcgNotionMetadata` / frontmatter
-- `NcgNotionMetadata` type and `NotionPageExtended` are defined in `types.ts`
-- Now mostly superseded by the `plugins/frontmatter` plugin; the legacy type lingers for backwards-compat callers but isn't read anywhere
-
 ## Build & type-check
 
 ```bash
 pnpm check   # tsc --noEmit
 pnpm build   # tsc (outputs to dist/)
+pnpm test    # node --test against tests/*.test.ts (TS via tsx)
 ```
 
-No tests exist yet.
+The test harness wraps the Generator/buildPageTree against a fake
+`NotionParser` (no Notion network required). See `tests/` for the suite.
 
 ## Config format
 
 ```ts
 // notion-content-gen.config.ts
-import type { Config } from "./src/types";
+import type { Config } from "notion-content-gen";
 
 const config: Config = {
   notionToken: process.env.NOTION_SECRET!,

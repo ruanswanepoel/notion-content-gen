@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { computeNodeFilePath } from "./util.js";
 import type { PageNode } from "./page_node.js";
-import type { Plugin } from "./types.js";
+import type { LifecycleContext, Plugin } from "./types.js";
 import { emptyCache, type CacheData } from "./cache.js";
 import { Logger } from "./logger.js";
 
@@ -45,26 +45,26 @@ export class Generator {
 
   /**
    * Runs the full generation lifecycle: beforeAll → generateContent → afterAll.
-   * In dry-run mode, `afterAll` is skipped because such hooks commonly write
-   * sidecar artifacts to disk (e.g. `_meta.json`) which would defeat the
-   * "don't touch disk" guarantee.
+   *
+   * `afterAll` is still invoked in dry-run mode but receives `dryRun: true` in
+   * its context so plugins can branch (skip sidecar writes, but still run
+   * validation logic). `onFileWritten` is suppressed entirely in dry-run since
+   * no file actually got written.
    */
   async run(rootNode: PageNode, contentDir: string): Promise<void> {
-    await this.runBeforeAll(rootNode);
+    const ctx: LifecycleContext = {
+      dryRun: this.config.dryRun,
+      logger: this.config.logger,
+    };
+    await this.runBeforeAll(rootNode, ctx);
     await this.generateContent(rootNode, contentDir);
-    if (!this.config.dryRun) await this.runAfterAll(rootNode);
+    await this.runAfterAll(rootNode, ctx);
   }
 
   async generateContent(node: PageNode, dir: string): Promise<void> {
-    let keep: boolean;
-    try {
-      keep = await this.runFilter(node);
-    } catch (err) {
-      if (!(await this.runOnError(err, node))) throw err;
-      this.stats.errored++;
-      return;
-    }
-    if (!keep) {
+    // The filter pipeline already ran at tree-build time; honor its decision
+    // here without re-invoking the hooks (avoids double-running side effects).
+    if (node.filtered) {
       this.stats.filtered++;
       return;
     }
@@ -88,7 +88,7 @@ export class Generator {
       fs.mkdirSync(childDir, { recursive: true });
     }
 
-    const lastEditedTime = node.notionPage?.page?.last_edited_time;
+    const lastEditedTime = node.lastEditedTime;
     const canSkipWrite = node.unchanged && fs.existsSync(filePath);
 
     let wroteOk = true;
@@ -97,8 +97,7 @@ export class Generator {
       this.config.logger.debug(`unchanged: ${filePath}`);
     } else {
       try {
-        const raw = node.notionPage?.mdString?.parent ?? "";
-        const content = await this.runTransform(raw, node);
+        const content = await this.runTransform(node.mdString, node);
         const existed = fs.existsSync(filePath);
 
         if (this.config.dryRun) {
@@ -132,19 +131,22 @@ export class Generator {
       this.newCache.pages[node.notionId] = { lastEditedTime, filePath };
     }
 
+    // If a non-leaf failed and the error was suppressed, recursing into its
+    // children would write files into a directory whose `index` is missing —
+    // an unusable broken subtree. Drop the children instead.
+    if (!wroteOk && !isLeaf) {
+      const dropped = countDescendants(node);
+      this.stats.errored += dropped;
+      this.config.logger.warn(
+        `Skipping ${dropped} descendant(s) of ${node.notionId} because the parent index file was not written.`,
+        { notionId: node.notionId, filePath },
+      );
+      return;
+    }
+
     for (const child of node.childNodes) {
       await this.generateContent(child, childDir);
     }
-  }
-
-  private async runFilter(node: PageNode): Promise<boolean> {
-    for (const plugin of this.config.plugins) {
-      const filter = plugin.hooks?.filter;
-      if (!filter) continue;
-      const result = await filter(node);
-      if (result === false) return false;
-    }
-    return true;
   }
 
   private async runTransform(content: string, node: PageNode): Promise<string> {
@@ -166,15 +168,21 @@ export class Generator {
     }
   }
 
-  private async runBeforeAll(tree: PageNode): Promise<void> {
+  private async runBeforeAll(
+    tree: PageNode,
+    ctx: LifecycleContext,
+  ): Promise<void> {
     for (const plugin of this.config.plugins) {
-      await plugin.hooks?.beforeAll?.(tree);
+      await plugin.hooks?.beforeAll?.(tree, ctx);
     }
   }
 
-  private async runAfterAll(tree: PageNode): Promise<void> {
+  private async runAfterAll(
+    tree: PageNode,
+    ctx: LifecycleContext,
+  ): Promise<void> {
     for (const plugin of this.config.plugins) {
-      await plugin.hooks?.afterAll?.(tree);
+      await plugin.hooks?.afterAll?.(tree, ctx);
     }
   }
 
@@ -192,4 +200,12 @@ export class Generator {
     }
     return suppressed;
   }
+}
+
+function countDescendants(node: PageNode): number {
+  let n = 0;
+  for (const child of node.childNodes) {
+    n += 1 + countDescendants(child);
+  }
+  return n;
 }

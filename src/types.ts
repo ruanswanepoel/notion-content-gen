@@ -1,67 +1,44 @@
 import type {
   BlockObjectResponse,
+  ChildPageBlockObjectResponse,
   PageObjectResponse,
 } from "@notionhq/client";
-import type { MdStringObject } from "notion-to-md/build/types/index.js";
 import z from "zod";
 
-// Notion types
+// Re-exported SDK types — surfaced here so plugin authors importing from
+// `notion-content-gen/types` get the canonical Notion shapes without having
+// to depend on `@notionhq/client` directly.
 export type NotionBlock = BlockObjectResponse;
 export type NotionPage = PageObjectResponse;
+export type NotionChildPageBlock = ChildPageBlockObjectResponse;
+export type NotionPageProperty = PageObjectResponse["properties"][string];
 
 // Actual return type of NotionParser.retrievePage
 export type RetrievedPage = {
   page: PageObjectResponse;
-  blocks: { results: BlockChildrenResponseExtended[] };
-  mdString: MdStringObject;
-  childPages: BlockChildrenResponseExtended[];
-};
-
-// Extended Notion types
-/// Represents the metadata in a Notion page
-export type NcgNotionMetadata = {
-  published?: boolean;
-  title?: string;
-  description?: string;
-  slug?: string;
-};
-export type NotionPageExtended = NotionPage & {
-  ncgMetadata?: NcgNotionMetadata;
-  child_page?: NotionPageExtended;
-};
-
-export type BlockChildrenResponseExtended = {
-  object: string;
-  id: string;
-  parent: {
-    type: string;
-    page_id: string;
-  };
-  created_time: string;
-  last_edited_time: string;
-  created_by: {
-    object: string;
-    id: string;
-  };
-  last_edited_by: {
-    object: string;
-    id: string;
-  };
-  has_children: boolean;
-  archived: boolean;
-  in_trash: boolean;
-  type: string;
-  child_page: {
-    title: string;
-  };
+  blocks: BlockObjectResponse[];
+  /** Markdown converted from `blocks`. Empty string when conversion was skipped. */
+  mdString: string;
+  /** `child_page` blocks extracted from `blocks` for convenience. */
+  childPages: ChildPageBlockObjectResponse[];
 };
 
 // Plugin system
 import type { PageNode } from "./page_node.js";
 import type { NotionParser } from "./notion_parser.js";
+import type { Logger } from "./logger.js";
 
 export type SetupContext = {
   notion: NotionParser;
+  /** True when the current generate run was started with `--dry-run`. */
+  dryRun: boolean;
+  logger: Logger;
+};
+
+export type LifecycleContext = {
+  /** True when the current generate run was started with `--dry-run`. */
+  dryRun: boolean;
+  logger: Logger;
 };
 
 /**
@@ -70,8 +47,10 @@ export type SetupContext = {
  *
  * - During tree build: a suppressed error drops the failing node (and any of
  *   its undiscovered children) from the tree.
- * - During generation: a suppressed error skips the failing node's file write
- *   but still recurses into its children.
+ * - During generation: a suppressed error on a leaf skips the failing node's
+ *   file write. A suppressed error on a non-leaf also drops the node's
+ *   children from generation — without the parent `index.md` the directory
+ *   would be unusable downstream.
  */
 export type Plugin = {
   name: string;
@@ -79,9 +58,15 @@ export type Plugin = {
     /** Fires once before any Notion API call. Use to register custom n2m transformers, etc. */
     setup?: (ctx: SetupContext) => void | Promise<void>;
     /** Fires once before generation starts, after the page tree is built. */
-    beforeAll?: (tree: PageNode) => void | Promise<void>;
+    beforeAll?: (
+      tree: PageNode,
+      ctx: LifecycleContext,
+    ) => void | Promise<void>;
     /** Fires once after all files have been written. */
-    afterAll?: (tree: PageNode) => void | Promise<void>;
+    afterAll?: (
+      tree: PageNode,
+      ctx: LifecycleContext,
+    ) => void | Promise<void>;
     /** Return `false` to skip the node and its descendants. */
     filter?: (node: PageNode) => boolean | Promise<boolean>;
     /** Receive the markdown string for a node and return a (possibly modified) replacement. */

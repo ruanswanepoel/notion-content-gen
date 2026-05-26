@@ -34,9 +34,9 @@
     "README.md"
   ],
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "build": "tsc",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --import tsx --test tests/*.test.ts"
   },
   "keywords": [],
   "author": "",
@@ -51,6 +51,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.10.2",
+    "tsx": "^4.22.3",
     "typescript": "^5.9.3"
   }
 }

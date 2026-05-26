@@ -1,21 +1,42 @@
 import fs from "fs";
+import type {
+  BlockObjectResponse,
+  ChildPageBlockObjectResponse,
+  PageObjectResponse,
+} from "@notionhq/client";
 import type { NotionParser } from "./notion_parser.js";
-import type { BlockChildrenResponseExtended, Plugin } from "./types.js";
+import type { NotionPageProperty, Plugin } from "./types.js";
 import type { CacheData } from "./cache.js";
-import { computeNodeFilePath, parseTitleForExtension, slugify } from "./util.js";
+import {
+  computeNodeFilePath,
+  parseTitleForExtension,
+  slugify,
+} from "./util.js";
 import { Logger } from "./logger.js";
 
 /**
- * Represents a notion page (content node) with its own content, metadata, and sub-pages.
+ * Represents a Notion page (content node) with its own content, metadata, and
+ * sub-pages. Notion data is promoted to first-class fields so plugins don't
+ * have to reach through optional chaining and `as any` casts.
  */
 export type PageNode = {
   notionId: string;
+  /** Plain-text page title as it appears in Notion's `child_page` block. */
   notionTitle: string;
-  notionPage:
-    | ({ metadata?: BlockChildrenResponseExtended } & Partial<
-        Awaited<ReturnType<typeof NotionParser.prototype.retrievePage>>
-      >)
-    | null;
+  /** Fully-typed Notion page object. `null` until fetched (root before visit). */
+  page: PageObjectResponse | null;
+  /** Notion property map, or `null` until the page is fetched. */
+  properties: PageObjectResponse["properties"] | null;
+  /** Notion page icon (emoji / external / file / custom), or `null`. */
+  icon: PageObjectResponse["icon"] | null;
+  /** Notion's `last_edited_time` for the page. `null` until fetched. */
+  lastEditedTime: string | null;
+  /** Raw blocks for the page (paginated fully). Empty until fetched. */
+  blocks: BlockObjectResponse[];
+  /** Markdown converted from `blocks`. Empty when conversion was skipped. */
+  mdString: string;
+  /** Source `child_page` block this node was created from. `null` on root. */
+  childPageBlock: ChildPageBlockObjectResponse | null;
   parentNode: PageNode | null;
   childNodes: PageNode[];
   /** Resolved output path for this node's file, computed during tree build. */
@@ -29,7 +50,24 @@ export type PageNode = {
    * slug collision was resolved by appending a `-N` suffix.
    */
   resolvedTitle?: string;
+  /**
+   * True when a plugin's `filter` hook returned `false` during tree build. The
+   * Generator honors this flag and skips the node (and its descendants).
+   */
+  filtered?: boolean;
 };
+
+/**
+ * Returns the Notion page property named `name`, or `undefined` if absent.
+ * Returns the raw property object (with its `type` discriminator) so callers
+ * can narrow with `prop.type === "rich_text"` etc.
+ */
+export function getProperty(
+  node: PageNode,
+  name: string,
+): NotionPageProperty | undefined {
+  return node.properties?.[name];
+}
 
 export type BuildPageTreeOptions = {
   cache?: CacheData | undefined;
@@ -40,6 +78,29 @@ export type BuildPageTreeOptions = {
   concurrency?: number;
   logger?: Logger;
 };
+
+function makeNode(init: {
+  notionId: string;
+  notionTitle: string;
+  parentNode: PageNode | null;
+  childPageBlock: ChildPageBlockObjectResponse | null;
+  resolvedTitle: string;
+}): PageNode {
+  return {
+    notionId: init.notionId,
+    notionTitle: init.notionTitle,
+    page: null,
+    properties: null,
+    icon: null,
+    lastEditedTime: null,
+    blocks: [],
+    mdString: "",
+    childPageBlock: init.childPageBlock,
+    parentNode: init.parentNode,
+    childNodes: [],
+    resolvedTitle: init.resolvedTitle,
+  };
+}
 
 /**
  * Builds the page/node tree according to the layout in Notion, starting from the given root page ID.
@@ -54,6 +115,11 @@ export type BuildPageTreeOptions = {
  * the cache and the existing file is still on disk, the node is marked
  * `unchanged` so the Generator can skip writing it. Otherwise the markdown is
  * converted in-place so the rest of the pipeline behaves as before.
+ *
+ * `filter` hooks run immediately after the page is fetched and before children
+ * are enqueued. If any plugin returns `false`, the node is marked `filtered`
+ * (the Generator honors the flag and skips it) and its subtree is not even
+ * fetched — saving an API round-trip per filtered descendant.
  *
  * Sibling slug collisions are detected per-directory at parent-visit time
  * (synchronously, in Notion's child order) so the result is deterministic
@@ -79,29 +145,43 @@ export async function buildPageTree(
     logger,
   } = options;
 
-  const rootNode: PageNode = {
+  const rootNode = makeNode({
     notionId: rootId,
     notionTitle: "Root",
-    notionPage: null,
     parentNode: null,
-    childNodes: [],
+    childPageBlock: null,
     resolvedTitle: "Root",
-  };
+  });
 
   // Tracks slugs already taken in each directory so siblings can't collide.
   const usedSlugsByDir = new Map<string, Set<string>>();
 
   const visit = async (node: PageNode): Promise<PageNode[]> => {
-    const retrievedPage = await notion.retrievePage(node.notionId, {
-      skipMarkdown: !!cache,
+    // Skip markdown conversion at fetch time — we may filter the node away
+    // before we ever need the markdown. Convert lazily below if it survives.
+    const retrieved = await notion.retrievePage(node.notionId, {
+      skipMarkdown: true,
     });
-    node.notionPage = {
-      ...node.notionPage,
-      ...retrievedPage,
-    };
+    node.page = retrieved.page;
+    node.properties = retrieved.page.properties;
+    node.icon = retrieved.page.icon;
+    node.lastEditedTime = retrieved.page.last_edited_time;
+    node.blocks = retrieved.blocks;
+
+    // Use the fetched page's title for the root, where the synthetic "Root"
+    // placeholder isn't useful to plugins. Non-root nodes already carry the
+    // child_page title from their parent's block list.
+    if (node.parentNode === null) {
+      const realTitle = extractPageTitle(retrieved.page);
+      if (realTitle) {
+        node.notionTitle = realTitle;
+        // Don't overwrite resolvedTitle — the root file path is "<contentDir>/Root/..."
+        // by convention; renaming after the fact would break existing layouts.
+      }
+    }
 
     const parentDir = node.parentNode?.childDir ?? contentDir;
-    const hasChildren = retrievedPage.childPages.length > 0;
+    const hasChildren = retrieved.childPages.length > 0;
     const titleForPath = node.resolvedTitle ?? node.notionTitle;
     const { filePath, childDir } = computeNodeFilePath(
       titleForPath,
@@ -112,46 +192,51 @@ export async function buildPageTree(
     node.filePath = filePath;
     node.childDir = childDir;
 
+    // Run filter hooks as soon as we have a full node. A `false` result skips
+    // the subtree entirely — no markdown conversion, no children enqueued.
+    if (!(await runFilter(node, plugins))) {
+      node.filtered = true;
+      return [];
+    }
+
     if (cache) {
       const cached = cache.pages[node.notionId];
       const unchanged =
         !!cached &&
-        cached.lastEditedTime === retrievedPage.page.last_edited_time &&
+        cached.lastEditedTime === retrieved.page.last_edited_time &&
         cached.filePath === filePath &&
         fs.existsSync(filePath);
       node.unchanged = unchanged;
 
       if (!unchanged) {
-        node.notionPage.mdString = await notion.convertBlocksToMarkdown(
-          retrievedPage.blocks.results,
-        );
+        node.mdString = await notion.convertBlocksToMarkdown(retrieved.blocks);
       }
+    } else {
+      node.mdString = await notion.convertBlocksToMarkdown(retrieved.blocks);
     }
 
     // Reserve unique sibling slugs in Notion's order, before any child is
     // dispatched for fetching. This keeps the collision-resolution
     // deterministic even though child visits run concurrently.
     const children: PageNode[] = [];
-    if (node.notionPage?.childPages) {
-      for (const cp of node.notionPage.childPages) {
-        const resolvedTitle = reserveSiblingSlug(
-          cp.child_page.title,
-          childDir,
-          usedSlugsByDir,
-          logger,
-          cp.id,
-        );
-        const newNode: PageNode = {
-          notionId: cp.id,
-          notionTitle: cp.child_page.title,
-          notionPage: { metadata: cp },
-          parentNode: node,
-          childNodes: [],
-          resolvedTitle,
-        };
-        node.childNodes.push(newNode);
-        children.push(newNode);
-      }
+    for (const cp of retrieved.childPages) {
+      const childTitle = cp.child_page.title;
+      const resolvedTitle = reserveSiblingSlug(
+        childTitle,
+        childDir,
+        usedSlugsByDir,
+        logger,
+        cp.id,
+      );
+      const newNode = makeNode({
+        notionId: cp.id,
+        notionTitle: childTitle,
+        parentNode: node,
+        childPageBlock: cp,
+        resolvedTitle,
+      });
+      node.childNodes.push(newNode);
+      children.push(newNode);
     }
     return children;
   };
@@ -239,7 +324,8 @@ function reserveSiblingSlug(
 
   let attempt = 0;
   while (true) {
-    const candidate = attempt === 0 ? title : appendSlugSuffix(title, attempt + 1);
+    const candidate =
+      attempt === 0 ? title : appendSlugSuffix(title, attempt + 1);
     const slugKey = computeSlugKey(candidate);
     if (!taken.has(slugKey)) {
       taken.add(slugKey);
@@ -279,6 +365,16 @@ function appendSlugSuffix(title: string, n: number): string {
   return `${title}-${n}`;
 }
 
+/** Returns `false` if any plugin's `filter` hook returns `false`. */
+async function runFilter(node: PageNode, plugins: Plugin[]): Promise<boolean> {
+  for (const plugin of plugins) {
+    const filter = plugin.hooks?.filter;
+    if (!filter) continue;
+    if ((await filter(node)) === false) return false;
+  }
+  return true;
+}
+
 async function runOnError(
   err: unknown,
   node: PageNode,
@@ -295,4 +391,13 @@ async function runOnError(
     }
   }
   return suppressed;
+}
+
+function extractPageTitle(page: PageObjectResponse): string | undefined {
+  for (const prop of Object.values(page.properties)) {
+    if (prop.type !== "title") continue;
+    const text = prop.title.map((r) => r.plain_text).join("");
+    if (text) return text;
+  }
+  return undefined;
 }

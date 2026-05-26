@@ -1,16 +1,18 @@
 #!/usr/bin/env node
 
+import { fileURLToPath } from "url";
 import { Command, Option } from "commander";
 import { init } from "./commands/init.js";
 import { generate } from "./commands/generate.js";
 import { watch } from "./commands/watch.js";
+import { getOwnPackageVersion } from "../src/util.js";
 
 const program = new Command();
 
 program
   .name("notion-content-gen")
   .description("Generate static markdown content from Notion")
-  .version("0.0.0");
+  .version(getOwnPackageVersion(fileURLToPath(import.meta.url)));
 
 program
   .command("init")

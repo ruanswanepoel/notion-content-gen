@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import type { PageNode } from "../page_node.js";
+import { getProperty, type PageNode } from "../page_node.js";
 import type { Plugin } from "../types.js";
 import { frontmatterPlugin } from "../plugins/frontmatter.js";
 import {
@@ -41,7 +41,8 @@ export type FumadocsPresetOptions = {
  * - Draft filtering via a Notion checkbox property
  *
  * Returns the plugins as an array so callers can spread them alongside their
- * own plugins, or trim/replace pieces as needed.
+ * own plugins, or trim/replace pieces as needed. Plugins fire in declaration
+ * order — anything spread *before* this preset's plugins runs first.
  */
 export function fumadocsPreset(
   options: FumadocsPresetOptions = {},
@@ -54,6 +55,8 @@ export function fumadocsPreset(
     name: "fumadocs:drafts",
     hooks: {
       filter: (node) => {
+        // Root has no real properties — always keep it.
+        if (node.parentNode === null) return true;
         const published = getCheckbox(node, publishedProp);
         // Missing property = treat as published.
         return published === undefined ? true : published;
@@ -67,7 +70,7 @@ export function fumadocsPreset(
       // and its file is rarely consumed as docs — skip frontmatter on it.
       if (node.parentNode === null) return undefined;
       return {
-        title: getPageTitle(node),
+        title: node.notionTitle,
         description: getRichText(node, descriptionProp),
         icon: getIconString(node),
         full: getCheckbox(node, fullProp),
@@ -79,7 +82,13 @@ export function fumadocsPreset(
   const meta: Plugin = {
     name: "fumadocs:meta",
     hooks: {
-      afterAll: (tree) => writeMetaFiles(tree),
+      afterAll: (tree, ctx) => {
+        // `afterAll` still fires in dry-run so plugins can run validation —
+        // skip the actual sidecar writes here, but recurse so a plugin chain
+        // remains predictable.
+        if (ctx.dryRun) return;
+        writeMetaFiles(tree);
+      },
     },
   };
 
@@ -112,49 +121,21 @@ function slugForMeta(node: PageNode): string | undefined {
 
 // --- Notion property extractors -------------------------------------------
 
-function pageProperties(node: PageNode): Record<string, unknown> | undefined {
-  const page = node.notionPage?.page;
-  if (!page || !("properties" in page)) return undefined;
-  return page.properties as Record<string, unknown>;
-}
-
-function getPageTitle(node: PageNode): string {
-  const props = pageProperties(node);
-  if (props) {
-    for (const prop of Object.values(props)) {
-      if (
-        prop &&
-        typeof prop === "object" &&
-        (prop as { type?: string }).type === "title"
-      ) {
-        const richText = (prop as { title: { plain_text: string }[] }).title;
-        const text = richText.map((r) => r.plain_text).join("");
-        if (text) return text;
-      }
-    }
-  }
-  return node.notionTitle;
-}
-
 function getRichText(node: PageNode, name: string): string | undefined {
-  const prop = pageProperties(node)?.[name] as
-    | { type: string; rich_text: { plain_text: string }[] }
-    | undefined;
+  const prop = getProperty(node, name);
   if (!prop || prop.type !== "rich_text") return undefined;
   const text = prop.rich_text.map((r) => r.plain_text).join("");
   return text || undefined;
 }
 
 function getCheckbox(node: PageNode, name: string): boolean | undefined {
-  const prop = pageProperties(node)?.[name] as
-    | { type: string; checkbox: boolean }
-    | undefined;
+  const prop = getProperty(node, name);
   if (!prop || prop.type !== "checkbox") return undefined;
   return prop.checkbox;
 }
 
 function getIconString(node: PageNode): string | undefined {
-  const icon = node.notionPage?.page?.icon;
+  const icon = node.icon;
   if (!icon) return undefined;
   if (icon.type === "emoji") return icon.emoji;
   if (icon.type === "external") return icon.external.url;

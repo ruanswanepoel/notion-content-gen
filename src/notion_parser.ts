@@ -1,10 +1,14 @@
-import { Client, isFullPage } from "@notionhq/client";
+import {
+  Client,
+  isFullBlock,
+  isFullPage,
+  type BlockObjectResponse,
+  type ChildPageBlockObjectResponse,
+  type ListBlockChildrenResponse,
+} from "@notionhq/client";
 import { NotionToMarkdown } from "notion-to-md";
-import type { BlockChildrenResponseExtended, RetrievedPage } from "./types.js";
-import type {
-  ListBlockChildrenResponseResults,
-  MdStringObject,
-} from "notion-to-md/build/types/index.js";
+import type { RetrievedPage } from "./types.js";
+import type { ListBlockChildrenResponseResults } from "notion-to-md/build/types/index.js";
 import { withRetry } from "./retry.js";
 
 export type RetrievePageOptions = {
@@ -43,7 +47,7 @@ export class NotionParser {
     pageId: string,
     options: RetrievePageOptions = {},
   ): Promise<RetrievedPage> {
-    const [pageResult, blockResults] = await Promise.all([
+    const [pageResult, blocks] = await Promise.all([
       withRetry(() => this.notionClient.pages.retrieve({ page_id: pageId })),
       this.listAllBlockChildren(pageId),
     ]);
@@ -54,17 +58,17 @@ export class NotionParser {
       );
     }
 
-    const childPages = blockResults.filter(
-      (page) => page.type == "child_page",
+    const childPages = blocks.filter(
+      (b): b is ChildPageBlockObjectResponse => b.type === "child_page",
     );
 
-    const mdString: MdStringObject = options.skipMarkdown
-      ? { parent: "" }
-      : await this.convertBlocksToMarkdown(blockResults);
+    const mdString = options.skipMarkdown
+      ? ""
+      : await this.convertBlocksToMarkdown(blocks);
 
     return {
       page: pageResult,
-      blocks: { results: blockResults },
+      blocks,
       mdString,
       childPages,
     };
@@ -75,26 +79,29 @@ export class NotionParser {
    * and returns the full concatenated list. Notion paginates at 100 entries
    * per response, so this is required for any page with more than 100 blocks
    * or 100 children.
+   *
+   * Partial-block results from the SDK are filtered out — the rest of the
+   * pipeline only handles full blocks.
    */
   async listAllBlockChildren(
     blockId: string,
-  ): Promise<BlockChildrenResponseExtended[]> {
-    const all: BlockChildrenResponseExtended[] = [];
+  ): Promise<BlockObjectResponse[]> {
+    const all: BlockObjectResponse[] = [];
     let cursor: string | undefined = undefined;
     do {
       const params: { block_id: string; start_cursor?: string } = {
         block_id: blockId,
       };
       if (cursor) params.start_cursor = cursor;
-      const response = (await withRetry(() =>
+      const response: ListBlockChildrenResponse = await withRetry(() =>
         this.notionClient.blocks.children.list(params),
-      )) as unknown as {
-        results: BlockChildrenResponseExtended[];
-        has_more: boolean;
-        next_cursor: string | null;
-      };
-      all.push(...response.results);
-      cursor = response.has_more ? (response.next_cursor ?? undefined) : undefined;
+      );
+      for (const block of response.results) {
+        if (isFullBlock(block)) all.push(block);
+      }
+      cursor = response.has_more
+        ? (response.next_cursor ?? undefined)
+        : undefined;
     } while (cursor);
     return all;
   }
@@ -104,11 +111,12 @@ export class NotionParser {
    * that initially skipped markdown (e.g. incremental sync) can convert later.
    */
   async convertBlocksToMarkdown(
-    blocks: BlockChildrenResponseExtended[],
-  ): Promise<MdStringObject> {
+    blocks: BlockObjectResponse[],
+  ): Promise<string> {
     const mdBlocks = await this.n2m.blocksToMarkdown(
       blocks as unknown as ListBlockChildrenResponseResults,
     );
-    return this.n2m.toMarkdownString(mdBlocks);
+    const md = this.n2m.toMarkdownString(mdBlocks);
+    return md.parent ?? "";
   }
 }
