@@ -145,6 +145,26 @@ its own cache namespace — either separate cache files, or one cache file
 keyed `{ roots: { rootId: { pages: {...} } } }`. The latter is friendlier for
 CI cache restoration.
 
+In-flight design in [MULTI-ROOT CONFIG IMPLEMENTATION.md](MULTI-ROOT%20CONFIG%20IMPLEMENTATION.md).
+
+### Notion wiki support
+Treat Notion wikis (which are databases under the hood) as a first-class
+content source alongside traditional page trees. Wiki traversal uses
+`databases.query` to pull every item's page object in one paginated stream,
+which is materially faster than walking a page tree of the same size
+(`N+2` Notion calls vs `2N+2`). The architecture extends `PageNode` with a
+`kind: "page" | "wiki"` discriminator so the tree can be heterogeneous —
+a regular page subtree can contain a wiki, a wiki item can contain a
+regular page subtree, and detection happens during traversal without any
+extra config.
+
+Composes with multi-root: each root is independently classified, so a single
+run can mix page-tree roots and wiki roots. Should be implemented after
+multi-root (it builds on the per-root cache structure) and benefits from
+landing on the same branch.
+
+Deep dive: [NOTION WIKI SUPPORT.md](NOTION%20WIKI%20SUPPORT.md).
+
 ---
 
 ## Documentation (no code required)
@@ -189,10 +209,18 @@ The CI-readiness blockers, the `PageNode` property promotion, the
 architectural improvements, the small fixes, and the initial test harness
 have all landed. What's left on the roadmap is the genuinely new work:
 
-1. **`assets` plugin** (download Notion CDN images, rewrite to local paths).
+1. **Multi-root config** — design in
+   [MULTI-ROOT CONFIG IMPLEMENTATION.md](MULTI-ROOT%20CONFIG%20IMPLEMENTATION.md);
+   prerequisite for the wiki work because it establishes the per-root cache
+   structure wikis reuse.
+2. **Notion wiki support** — design in
+   [NOTION WIKI SUPPORT.md](NOTION%20WIKI%20SUPPORT.md). Land on the same
+   branch as multi-root so the `PageNode.kind` discriminator and the cache
+   rename (`pages` → `entries`) only happen once.
+3. **`assets` plugin** (download Notion CDN images, rewrite to local paths).
    Probably wants a `transformBlocks` hook so it can run on raw blocks rather
    than post-conversion markdown.
-2. **Webhook-triggered redeploys** — docs-only.
-3. **Multi-root config** — only when there's user demand.
+4. **Webhook-triggered redeploys** — docs-only.
 
-Database support remains deferrable.
+Tabular database support (databases-as-content beyond wikis) remains
+deferrable.
