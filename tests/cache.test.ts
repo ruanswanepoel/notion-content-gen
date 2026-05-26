@@ -4,7 +4,7 @@ import fs from "fs";
 import path from "path";
 import { buildPageTree } from "../src/page_node.js";
 import { Generator } from "../src/generator.js";
-import { emptyCache, type CacheData } from "../src/cache.js";
+import { emptyCache, type CacheRoot } from "../src/cache.js";
 import { FakeNotionParser, asNotionParser, mkTmpDir } from "./fakes.js";
 
 test("cache hit: unchanged page is skipped and not rewritten", async () => {
@@ -17,9 +17,8 @@ test("cache hit: unchanged page is skipped and not rewritten", async () => {
     // Seed the cache and pre-write the file as if a prior run produced it.
     const filePath = path.join(dir, "root.md");
     fs.writeFileSync(filePath, "PRESERVED CONTENT");
-    const cache: CacheData = {
-      version: 1,
-      pages: {
+    const cache: CacheRoot = {
+      entries: {
         root: {
           lastEditedTime: "2025-01-01T00:00:00.000Z",
           filePath,
@@ -61,9 +60,8 @@ test("cache miss: changed last_edited_time triggers rewrite", async () => {
 
     const filePath = path.join(dir, "root.md");
     fs.writeFileSync(filePath, "STALE");
-    const cache: CacheData = {
-      version: 1,
-      pages: {
+    const cache: CacheRoot = {
+      entries: {
         root: {
           lastEditedTime: "2025-01-01T00:00:00.000Z",
           filePath,
@@ -95,9 +93,8 @@ test("cache miss: missing output file triggers rewrite even if time matches", as
     ]);
 
     const filePath = path.join(dir, "root.md");
-    const cache: CacheData = {
-      version: 1,
-      pages: {
+    const cache: CacheRoot = {
+      entries: {
         root: {
           lastEditedTime: "2025-01-01T00:00:00.000Z",
           filePath,
@@ -139,10 +136,11 @@ test("cache disabled: every page is converted and written", async () => {
 
     assert.equal(gen.stats.skipped, 0);
     assert.equal(gen.stats.written, 2);
-    assert.ok(gen.newCache.pages.root, "cache builds even when not loaded");
-    assert.ok(gen.newCache.pages.a);
-    // emptyCache() helper used by the Generator
-    assert.equal(emptyCache().version, 1);
+    assert.ok(gen.newCache.entries.root, "cache builds even when not loaded");
+    assert.ok(gen.newCache.entries.a);
+    // emptyCache() helper now keyed by root
+    assert.equal(emptyCache().version, 2);
+    assert.deepEqual(emptyCache().roots, {});
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -1,13 +1,20 @@
 import {
+  APIErrorCode,
+  APIResponseError,
   Client,
   isFullBlock,
+  isFullDatabase,
   isFullPage,
   type BlockObjectResponse,
+  type ChildDatabaseBlockObjectResponse,
   type ChildPageBlockObjectResponse,
+  type DatabaseObjectResponse,
   type ListBlockChildrenResponse,
+  type PageObjectResponse,
+  type QueryDataSourceResponse,
 } from "@notionhq/client";
 import { NotionToMarkdown } from "notion-to-md";
-import type { RetrievedPage } from "./types.js";
+import type { NodeKind, RetrievedDatabase, RetrievedPage } from "./types.js";
 import type { ListBlockChildrenResponseResults } from "notion-to-md/build/types/index.js";
 import { withRetry } from "./retry.js";
 
@@ -61,6 +68,9 @@ export class NotionParser {
     const childPages = blocks.filter(
       (b): b is ChildPageBlockObjectResponse => b.type === "child_page",
     );
+    const childDatabases = blocks.filter(
+      (b): b is ChildDatabaseBlockObjectResponse => b.type === "child_database",
+    );
 
     const mdString = options.skipMarkdown
       ? ""
@@ -71,6 +81,7 @@ export class NotionParser {
       blocks,
       mdString,
       childPages,
+      childDatabases,
     };
   }
 
@@ -119,4 +130,104 @@ export class NotionParser {
     const md = this.n2m.toMarkdownString(mdBlocks);
     return md.parent ?? "";
   }
+
+  /**
+   * Probes the Notion API to determine whether an id refers to a page or a
+   * database (wiki). Tries the pages endpoint first since regular pages are
+   * the more common case at the root level. On a wrong-object-type error,
+   * falls back to the databases endpoint.
+   *
+   * Throws for unrelated errors (auth, network, missing-id), which should
+   * propagate so the caller sees the real problem.
+   */
+  async classifyNode(id: string): Promise<NodeKind> {
+    try {
+      await withRetry(() => this.notionClient.pages.retrieve({ page_id: id }));
+      return "page";
+    } catch (err) {
+      if (!isWrongObjectTypeError(err)) throw err;
+      // If pages.retrieve says "no such page" or "validation error", try the
+      // database endpoint. A real not-found will still throw from databases.
+      await withRetry(() =>
+        this.notionClient.databases.retrieve({ database_id: id }),
+      );
+      return "wiki";
+    }
+  }
+
+  /**
+   * Retrieves a Notion database (wiki) and queries every item in each of its
+   * data sources. Pagination is exhausted internally. The returned `items`
+   * list is flat — the tree builder reconstructs hierarchy from each page's
+   * `parent` field.
+   *
+   * Most wikis have a single data source; if Notion ever returns multiple,
+   * items from all of them are concatenated in declaration order.
+   */
+  async retrieveDatabase(databaseId: string): Promise<RetrievedDatabase> {
+    const dbResult = await withRetry(() =>
+      this.notionClient.databases.retrieve({ database_id: databaseId }),
+    );
+    if (!isFullDatabase(dbResult)) {
+      throw new Error(
+        `Notion returned a partial database object for ${databaseId}. Check that the integration has access to this database.`,
+      );
+    }
+    const items: PageObjectResponse[] = [];
+    for (const ds of dbResult.data_sources) {
+      const dsItems = await this.queryAllDataSourceItems(ds.id);
+      items.push(...dsItems);
+    }
+    return { database: dbResult, items };
+  }
+
+  /**
+   * Walks every cursor page of `dataSources.query` and returns the
+   * concatenated list of full page objects. Partial pages and data-source
+   * results are filtered out — the rest of the pipeline only handles full
+   * pages.
+   */
+  async queryAllDataSourceItems(
+    dataSourceId: string,
+  ): Promise<PageObjectResponse[]> {
+    const all: PageObjectResponse[] = [];
+    let cursor: string | undefined = undefined;
+    do {
+      const params: {
+        data_source_id: string;
+        start_cursor?: string;
+      } = { data_source_id: dataSourceId };
+      if (cursor) params.start_cursor = cursor;
+      const response: QueryDataSourceResponse = await withRetry(() =>
+        this.notionClient.dataSources.query(params),
+      );
+      for (const result of response.results) {
+        if (result.object === "page" && isFullPage(result)) {
+          all.push(result);
+        }
+      }
+      cursor = response.has_more
+        ? (response.next_cursor ?? undefined)
+        : undefined;
+    } while (cursor);
+    return all;
+  }
+}
+
+/**
+ * Returns true when a Notion error indicates "this id exists but isn't the
+ * object type we asked for." Used by {@link NotionParser.classifyNode} to
+ * decide whether to fall back to the other endpoint.
+ *
+ * Notion has historically returned either `object_not_found` (the id exists
+ * but as a different object type the integration can't access) or
+ * `validation_error` (the id format works for a different object type) in
+ * this scenario, so we accept both.
+ */
+function isWrongObjectTypeError(err: unknown): boolean {
+  if (!(err instanceof APIResponseError)) return false;
+  return (
+    err.code === APIErrorCode.ObjectNotFound ||
+    err.code === APIErrorCode.ValidationError
+  );
 }

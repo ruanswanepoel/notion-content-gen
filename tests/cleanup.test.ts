@@ -4,8 +4,8 @@ import fs from "fs";
 import path from "path";
 import {
   cleanupStaleFiles,
-  emptyCache,
-  type CacheData,
+  emptyRoot,
+  type CacheRoot,
 } from "../src/cache.js";
 import { mkTmpDir } from "./fakes.js";
 
@@ -17,21 +17,19 @@ test("cleanupStaleFiles removes files no longer claimed by the new cache", () =>
     fs.writeFileSync(stale, "x");
     fs.writeFileSync(kept, "y");
 
-    const oldCache: CacheData = {
-      version: 1,
-      pages: {
+    const oldRoot: CacheRoot = {
+      entries: {
         a: { lastEditedTime: "t", filePath: stale },
         b: { lastEditedTime: "t", filePath: kept },
       },
     };
-    const newCache: CacheData = {
-      version: 1,
-      pages: {
+    const newRoot: CacheRoot = {
+      entries: {
         b: { lastEditedTime: "t", filePath: kept },
       },
     };
 
-    const result = cleanupStaleFiles(oldCache, newCache, { contentDir: dir });
+    const result = cleanupStaleFiles(oldRoot, newRoot, { contentDir: dir });
     assert.equal(result.removed.length, 1);
     assert.equal(fs.existsSync(stale), false);
     assert.equal(fs.existsSync(kept), true);
@@ -48,13 +46,12 @@ test("cleanupStaleFiles only touches paths the old cache claimed", () => {
     fs.writeFileSync(tracked, "x");
     fs.writeFileSync(untracked, "y");
 
-    const oldCache: CacheData = {
-      version: 1,
-      pages: { a: { lastEditedTime: "t", filePath: tracked } },
+    const oldRoot: CacheRoot = {
+      entries: { a: { lastEditedTime: "t", filePath: tracked } },
     };
-    const newCache = emptyCache();
+    const newRoot = emptyRoot();
 
-    const result = cleanupStaleFiles(oldCache, newCache, { contentDir: dir });
+    const result = cleanupStaleFiles(oldRoot, newRoot, { contentDir: dir });
     assert.equal(result.removed.length, 1);
     assert.equal(fs.existsSync(tracked), false);
     assert.equal(fs.existsSync(untracked), true, "untracked file preserved");
@@ -71,13 +68,10 @@ test("cleanupStaleFiles refuses to escape contentDir", () => {
     const escapedPath = path.join(root, "outside.md");
     fs.writeFileSync(escapedPath, "do not touch");
 
-    const oldCache: CacheData = {
-      version: 1,
-      pages: { a: { lastEditedTime: "t", filePath: escapedPath } },
+    const oldRoot: CacheRoot = {
+      entries: { a: { lastEditedTime: "t", filePath: escapedPath } },
     };
-    const newCache = emptyCache();
-
-    const result = cleanupStaleFiles(oldCache, newCache, { contentDir: dir });
+    const result = cleanupStaleFiles(oldRoot, emptyRoot(), { contentDir: dir });
     assert.equal(result.skipped.length, 1);
     assert.equal(fs.existsSync(escapedPath), true);
   } finally {
@@ -93,11 +87,10 @@ test("cleanupStaleFiles prunes emptied directories but never contentDir", () => 
     const leaf = path.join(subdir, "x.md");
     fs.writeFileSync(leaf, "x");
 
-    const oldCache: CacheData = {
-      version: 1,
-      pages: { a: { lastEditedTime: "t", filePath: leaf } },
+    const oldRoot: CacheRoot = {
+      entries: { a: { lastEditedTime: "t", filePath: leaf } },
     };
-    cleanupStaleFiles(oldCache, emptyCache(), { contentDir: dir });
+    cleanupStaleFiles(oldRoot, emptyRoot(), { contentDir: dir });
 
     assert.equal(fs.existsSync(leaf), false);
     assert.equal(fs.existsSync(subdir), false);
@@ -114,11 +107,10 @@ test("cleanupStaleFiles dry-run reports without removing", () => {
     const stale = path.join(dir, "stale.md");
     fs.writeFileSync(stale, "x");
 
-    const oldCache: CacheData = {
-      version: 1,
-      pages: { a: { lastEditedTime: "t", filePath: stale } },
+    const oldRoot: CacheRoot = {
+      entries: { a: { lastEditedTime: "t", filePath: stale } },
     };
-    const result = cleanupStaleFiles(oldCache, emptyCache(), {
+    const result = cleanupStaleFiles(oldRoot, emptyRoot(), {
       contentDir: dir,
       dryRun: true,
     });

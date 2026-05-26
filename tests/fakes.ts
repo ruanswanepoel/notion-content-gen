@@ -3,11 +3,17 @@ import os from "os";
 import path from "path";
 import type {
   BlockObjectResponse,
+  ChildDatabaseBlockObjectResponse,
   ChildPageBlockObjectResponse,
+  DatabaseObjectResponse,
   PageObjectResponse,
 } from "@notionhq/client";
 import type { NotionParser } from "../src/notion_parser.js";
-import type { RetrievedPage } from "../src/types.js";
+import type {
+  NodeKind,
+  RetrievedDatabase,
+  RetrievedPage,
+} from "../src/types.js";
 
 /**
  * Test harness for the buildPageTree / Generator pipeline. Returns canned
@@ -21,23 +27,84 @@ export type FakePageInput = {
   markdown?: string;
   /** Child Notion page ids, in order. */
   children?: string[];
+  /** Child databases nested inside this page (in document order). */
+  childDatabases?: Array<{ id: string; title: string }>;
   /** Optional last_edited_time; defaults to `"2025-01-01T00:00:00.000Z"`. */
   lastEditedTime?: string;
   /** Optional properties map merged onto the synthesized page. */
   properties?: Record<string, unknown>;
   /** Optional icon attached to the synthesized page. */
   icon?: PageObjectResponse["icon"];
+  /** Custom parent reference (defaults to `{ type: "page_id", page_id: "parent" }`). */
+  parent?: PageObjectResponse["parent"];
   /** When true, retrievePage throws on access — useful for error tests. */
   throws?: boolean;
 };
 
+/**
+ * Fake wiki/database input. The `items` array is the flat result of a
+ * `dataSources.query` — including any nested sub-pages whose `parent` is
+ * another item in the list.
+ */
+export type FakeDatabaseInput = {
+  id: string;
+  title: string;
+  description?: string;
+  /** Notion id of the database's single data source. Defaults to `<id>-ds`. */
+  dataSourceId?: string;
+  /** Last edited time on the database object. */
+  lastEditedTime?: string;
+  /**
+   * Pages in this wiki, flat. Pages with `parent: { type: "page_id", page_id: ... }`
+   * pointing at another item become nested sub-pages. Pages without an
+   * explicit parent are attached to the wiki root.
+   */
+  items: FakePageInput[];
+  /**
+   * Optional classification override. By default, ids registered as pages
+   * classify as "page" and ids registered as databases classify as "wiki" —
+   * set this to force a particular result for the classifyNode probe.
+   */
+  classifyAs?: NodeKind;
+};
+
 export class FakeNotionParser {
   pages = new Map<string, FakePageInput>();
+  databases = new Map<string, FakeDatabaseInput>();
   retrieveCalls: string[] = [];
+  databaseRetrieveCalls: string[] = [];
+  dataSourceQueryCalls: string[] = [];
+  classifyCalls: string[] = [];
   convertCalls = 0;
 
-  constructor(pages: FakePageInput[]) {
+  constructor(pages: FakePageInput[], databases: FakeDatabaseInput[] = []) {
     for (const p of pages) this.pages.set(p.id, p);
+    for (const d of databases) this.databases.set(d.id, d);
+  }
+
+  async classifyNode(id: string): Promise<NodeKind> {
+    this.classifyCalls.push(id);
+    const db = this.databases.get(id);
+    if (db) return db.classifyAs ?? "wiki";
+    if (this.pages.has(id)) return "page";
+    throw new Error(`No fake registration for id ${id}`);
+  }
+
+  async retrieveDatabase(databaseId: string): Promise<RetrievedDatabase> {
+    this.databaseRetrieveCalls.push(databaseId);
+    const db = this.databases.get(databaseId);
+    if (!db) throw new Error(`No fake database: ${databaseId}`);
+    const dataSourceId = db.dataSourceId ?? `${databaseId}-ds`;
+    this.dataSourceQueryCalls.push(dataSourceId);
+    const items = db.items.map((p) => {
+      // Register the item as a page so subsequent retrievePage works.
+      if (!this.pages.has(p.id)) this.pages.set(p.id, p);
+      return makePageObject(p.id, p);
+    });
+    return {
+      database: makeDatabaseObject(db, dataSourceId),
+      items,
+    };
   }
 
   async retrievePage(
@@ -57,8 +124,12 @@ export class FakeNotionParser {
       },
     );
 
+    const childDatabases: ChildDatabaseBlockObjectResponse[] = (
+      p.childDatabases ?? []
+    ).map((cdb) => makeChildDatabaseBlock(cdb.id, cdb.title));
+
     const page = makePageObject(pageId, p);
-    const blocks: BlockObjectResponse[] = [...childPages];
+    const blocks: BlockObjectResponse[] = [...childPages, ...childDatabases];
     // Tag the blocks array with the source page id so `convertBlocksToMarkdown`
     // can recover the right markdown later. This works because buildPageTree
     // passes the exact same array it received back to `convertBlocksToMarkdown`.
@@ -70,6 +141,7 @@ export class FakeNotionParser {
       blocks,
       mdString,
       childPages,
+      childDatabases,
     };
   }
 
@@ -112,6 +184,53 @@ function makeChildPageBlock(
   } as ChildPageBlockObjectResponse;
 }
 
+function makeChildDatabaseBlock(
+  id: string,
+  title: string,
+): ChildDatabaseBlockObjectResponse {
+  return {
+    type: "child_database",
+    child_database: { title },
+    parent: { type: "page_id", page_id: "parent" },
+    object: "block",
+    id,
+    created_time: "2025-01-01T00:00:00.000Z",
+    last_edited_time: "2025-01-01T00:00:00.000Z",
+    has_children: true,
+    archived: false,
+    in_trash: false,
+    created_by: { object: "user", id: "u" },
+    last_edited_by: { object: "user", id: "u" },
+  } as ChildDatabaseBlockObjectResponse;
+}
+
+function makeDatabaseObject(
+  input: FakeDatabaseInput,
+  dataSourceId: string,
+): DatabaseObjectResponse {
+  return {
+    object: "database",
+    id: input.id,
+    title: input.title
+      ? [{ type: "text", plain_text: input.title }]
+      : [],
+    description: input.description
+      ? [{ type: "text", plain_text: input.description }]
+      : [],
+    is_inline: false,
+    in_trash: false,
+    is_locked: false,
+    created_time: "2025-01-01T00:00:00.000Z",
+    last_edited_time: input.lastEditedTime ?? "2025-01-01T00:00:00.000Z",
+    data_sources: [{ id: dataSourceId, name: input.title || "default" }],
+    icon: null,
+    cover: null,
+    url: `https://notion.so/${input.id}`,
+    public_url: null,
+    parent: { type: "workspace", workspace: true },
+  } as unknown as DatabaseObjectResponse;
+}
+
 function makePageObject(id: string, input: FakePageInput): PageObjectResponse {
   const lastEditedTime = input.lastEditedTime ?? "2025-01-01T00:00:00.000Z";
   const titleProp = {
@@ -144,7 +263,7 @@ function makePageObject(id: string, input: FakePageInput): PageObjectResponse {
     is_locked: false,
     url: `https://notion.so/${id}`,
     public_url: null,
-    parent: { type: "page_id", page_id: "parent" },
+    parent: input.parent ?? { type: "page_id", page_id: "parent" },
     properties: {
       ...(input.properties ?? {}),
       Name: titleProp,

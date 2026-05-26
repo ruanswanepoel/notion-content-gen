@@ -3,7 +3,7 @@ import path from "path";
 import { computeNodeFilePath } from "./util.js";
 import type { PageNode } from "./page_node.js";
 import type { LifecycleContext, Plugin } from "./types.js";
-import { emptyCache, type CacheData } from "./cache.js";
+import { emptyRoot, type CacheRoot } from "./cache.js";
 import { Logger } from "./logger.js";
 
 type GeneratorConfig = {
@@ -24,7 +24,7 @@ export type GenerationStats = {
 
 export class Generator {
   config: Required<Omit<GeneratorConfig, "logger">> & { logger: Logger };
-  newCache: CacheData = emptyCache();
+  newCache: CacheRoot = emptyRoot();
   stats: GenerationStats = {
     written: 0,
     skipped: 0,
@@ -66,6 +66,20 @@ export class Generator {
     // here without re-invoking the hooks (avoids double-running side effects).
     if (node.filtered) {
       this.stats.filtered++;
+      return;
+    }
+
+    // Wiki nodes are directory-only — they own a childDir but emit no file
+    // of their own. Plugins that want to project the database description
+    // into output do so explicitly (e.g. via afterAll).
+    if (node.kind === "wiki") {
+      const childDir = node.childDir ?? dir;
+      if (!fs.existsSync(childDir) && !this.config.dryRun) {
+        fs.mkdirSync(childDir, { recursive: true });
+      }
+      for (const child of node.childNodes) {
+        await this.generateContent(child, childDir);
+      }
       return;
     }
 
@@ -128,7 +142,7 @@ export class Generator {
 
     // Only record successful nodes in the new cache so failures retry next run.
     if (lastEditedTime && wroteOk) {
-      this.newCache.pages[node.notionId] = { lastEditedTime, filePath };
+      this.newCache.entries[node.notionId] = { lastEditedTime, filePath };
     }
 
     // If a non-leaf failed and the error was suppressed, recursing into its

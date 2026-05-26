@@ -134,36 +134,28 @@ transformers as the fumadocs `mdx-blocks` plugin does.
 
 ## Config
 
-### Multiple roots
-Accept an array of `notionPageId` entries in config, each with its own
-`contentDir`. Enables multi-section sites (e.g. `docs/` from one Notion
-workspace, `blog/` from another) in a single run.
+Resolved items kept here as a record of what landed.
 
-Implementation note: the simplest approach is to keep `Config` as-is and add
-a top-level orchestrator that runs `generate` once per root. Each root gets
-its own cache namespace — either separate cache files, or one cache file
-keyed `{ roots: { rootId: { pages: {...} } } }`. The latter is friendlier for
-CI cache restoration.
+### Multiple roots — DONE
+Accepted: top-level `roots` array (mutually exclusive with `notionPageId`),
+each with its own `contentDir` and optional `fileExtension`. Cache is shared
+across roots as a single sidecar file keyed by root id
+(`{ version: 2, roots: { [rootId]: { entries: {...} } } }`). Cleanup is
+scoped per-root. `setup` hooks fire once per run; `beforeAll` / `afterAll`
+fire once per root. Roots run sequentially. Design archived in
+[MULTI-ROOT CONFIG IMPLEMENTATION.md](MULTI-ROOT%20CONFIG%20IMPLEMENTATION.md).
 
-In-flight design in [MULTI-ROOT CONFIG IMPLEMENTATION.md](MULTI-ROOT%20CONFIG%20IMPLEMENTATION.md).
-
-### Notion wiki support
-Treat Notion wikis (which are databases under the hood) as a first-class
-content source alongside traditional page trees. Wiki traversal uses
-`databases.query` to pull every item's page object in one paginated stream,
-which is materially faster than walking a page tree of the same size
-(`N+2` Notion calls vs `2N+2`). The architecture extends `PageNode` with a
-`kind: "page" | "wiki"` discriminator so the tree can be heterogeneous —
-a regular page subtree can contain a wiki, a wiki item can contain a
-regular page subtree, and detection happens during traversal without any
-extra config.
-
-Composes with multi-root: each root is independently classified, so a single
-run can mix page-tree roots and wiki roots. Should be implemented after
-multi-root (it builds on the per-root cache structure) and benefits from
-landing on the same branch.
-
-Deep dive: [NOTION WIKI SUPPORT.md](NOTION%20WIKI%20SUPPORT.md).
+### Notion wiki support — DONE
+Wikis are first-class. `PageNode` carries a `kind: "page" | "wiki"`
+discriminator; the tree builder uses `databases.retrieve` +
+`dataSources.query` for wiki nodes and reconstructs hierarchy from each
+returned page's `parent` field rather than walking blocks. Wiki nodes are
+directory-only (no auto-index file); the database title/description hang
+off the node as metadata for plugins to project as they see fit. The
+orchestrator probes each root once via `NotionParser.classifyNode` to
+decide how to walk it, and `child_database` blocks discovered mid-traversal
+become wiki sub-nodes (so wikis can be nested inside regular pages).
+Design archived in [NOTION WIKI SUPPORT.md](NOTION%20WIKI%20SUPPORT.md).
 
 ---
 
@@ -209,18 +201,15 @@ The CI-readiness blockers, the `PageNode` property promotion, the
 architectural improvements, the small fixes, and the initial test harness
 have all landed. What's left on the roadmap is the genuinely new work:
 
-1. **Multi-root config** — design in
-   [MULTI-ROOT CONFIG IMPLEMENTATION.md](MULTI-ROOT%20CONFIG%20IMPLEMENTATION.md);
-   prerequisite for the wiki work because it establishes the per-root cache
-   structure wikis reuse.
-2. **Notion wiki support** — design in
-   [NOTION WIKI SUPPORT.md](NOTION%20WIKI%20SUPPORT.md). Land on the same
-   branch as multi-root so the `PageNode.kind` discriminator and the cache
-   rename (`pages` → `entries`) only happen once.
-3. **`assets` plugin** (download Notion CDN images, rewrite to local paths).
+Multi-root and Notion wiki support both shipped on the same branch (the
+`PageNode.kind` refactor + cache rename happened once). What's left on the
+roadmap:
+
+1. **`assets` plugin** (download Notion CDN images, rewrite to local paths).
    Probably wants a `transformBlocks` hook so it can run on raw blocks rather
    than post-conversion markdown.
-4. **Webhook-triggered redeploys** — docs-only.
+2. **Webhook-triggered redeploys** — docs-only.
 
-Tabular database support (databases-as-content beyond wikis) remains
+Tabular database support (databases-as-content beyond wikis — exposing
+arbitrary databases as rows-of-pages rather than tree-of-pages) remains
 deferrable.
