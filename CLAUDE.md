@@ -49,8 +49,8 @@ src/
 ## How it works
 
 1. `generate` command calls `loadConfig()` → validates config via `ConfigSchema`, merges `plugins` from raw config
-2. `src/index.ts` creates a `NotionParser`, runs each plugin's `setup` hook against it (used to register `notion-to-md` custom transformers etc.), loads the cache (if enabled), then calls `buildPageTree(rootId, notionParser, { cache, contentDir, fileExtension, plugins })`
-3. `buildPageTree` uses an iterative BFS queue — each node fetches its page content and child pages via `notionParser.retrievePage()`. When a cache is provided, retrieval skips markdown conversion, resolves the expected output path, and marks the node `unchanged` if `last_edited_time` + path match the cache and the file still exists. Otherwise the markdown is converted in-place. Per-node retrieval errors are routed to plugin `onError` hooks; suppressed non-root failures are dropped from their parent's `childNodes`.
+2. `src/index.ts` creates a `NotionParser`, runs each plugin's `setup` hook against it (used to register `notion-to-md` custom transformers etc.), loads the cache (if enabled), then calls `buildPageTree(rootId, notionParser, { cache, contentDir, fileExtension, plugins, concurrency, logger })`
+3. `buildPageTree` runs a BFS worker pool (default 4 concurrent fetches, configurable via `concurrency`). Each node fetches its page + paginated block children via `notionParser.retrievePage()`. When a cache is provided, retrieval skips markdown conversion, resolves the expected output path, and marks the node `unchanged` if `last_edited_time` + path match the cache and the file still exists. Otherwise the markdown is converted in-place. Sibling slug collisions are resolved deterministically at parent-visit time (`-2`, `-3`, … suffixes) so worker scheduling doesn't change the output. Per-node retrieval errors are routed to plugin `onError` hooks; suppressed non-root failures are dropped from their parent's `childNodes`. All Notion calls run through `withRetry` (exponential backoff with jitter; respects `Retry-After` on 429s).
 4. `Generator.run(tree, contentDir)` runs the full lifecycle: `beforeAll` hooks → `generateContent` recursion → `afterAll` hooks. At each node:
    - `filter` hooks run first — returning `false` skips the node and its children
    - Leaf pages → `slug.md` (or title-derived extension if the page title includes one)
@@ -59,7 +59,7 @@ src/
    - `transform` hooks modify the markdown string before writing
    - `onFileWritten` hooks fire after each file is written
    - Any error from the filter/write/transform/onFileWritten path is sent to `onError`; if suppressed, the node's children still get a chance to run
-5. After generation, the fresh cache built by the Generator is written back to the sidecar JSON file. Entries for pages that no longer exist (or that errored without a successful write this run) are implicitly pruned.
+5. After generation, the orchestrator compares the previous cache against the new one and deletes any files whose paths are no longer claimed (page deleted, renamed, or moved in Notion). Only paths recorded in the previous cache are eligible — anything else in `contentDir` is never touched. Empty parent directories are pruned. Cleanup is gated by the `cleanup` config option (default `true`) and is a no-op when caching is disabled. The fresh cache is then written back to the sidecar JSON file. Entries for pages that no longer exist (or that errored without a successful write this run) are implicitly pruned.
 
 ## Incremental sync
 
@@ -101,7 +101,7 @@ await generate(config, {
 });
 ```
 
-`generate(config, options)` returns the `GenerationStats` (`written`, `created`, `updated`, `skipped`, `filtered`, `errored`).
+`generate(config, options)` returns the `GenerationStats` (`written`, `created`, `updated`, `skipped`, `filtered`, `errored`, `removed`).
 
 ## Plugin system
 
@@ -270,6 +270,8 @@ const config: Config = {
   contentDir: "content",        // output directory, defaults to "content"
   fileExtension: "md",          // default file extension, defaults to "md"
   cache: true,                  // incremental sync; true (default), false, or custom path
+  cleanup: true,                // delete files for pages removed/renamed in Notion (default true)
+  concurrency: 4,               // max concurrent Notion fetches during tree build (default 4)
   plugins: [
     {
       name: "my-plugin",

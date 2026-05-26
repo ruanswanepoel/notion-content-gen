@@ -103,6 +103,20 @@ export const ConfigSchema = z.object({
   contentDir: z.string().default("content"),
   fileExtension: z.string().default("md"),
   cache: z.union([z.boolean(), z.string()]).default(true),
+  /**
+   * Whether to delete files for pages removed/renamed in Notion since the last
+   * run. Only files the previous cache recorded as ours are eligible; anything
+   * else in `contentDir` is left alone. Defaults to `true`. Disable for setups
+   * that also write into `contentDir` from other sources.
+   */
+  cleanup: z.boolean().default(true),
+  /**
+   * Maximum number of concurrent Notion fetches during tree build. The Notion
+   * API limit is ~3 req/sec for integrations, and exceeding it triggers 429s
+   * (the built-in retry helper handles those, but lower concurrency is calmer).
+   * Defaults to 4.
+   */
+  concurrency: z.number().int().min(1).max(20).default(4),
 });
 
 export type Config = z.infer<typeof ConfigSchema> & {

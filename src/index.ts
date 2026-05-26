@@ -1,7 +1,12 @@
 import { Generator } from "./generator.js";
 import { buildPageTree } from "./page_node.js";
 import { NotionParser } from "./notion_parser.js";
-import { loadCache, resolveCachePath, saveCache } from "./cache.js";
+import {
+  cleanupStaleFiles,
+  loadCache,
+  resolveCachePath,
+  saveCache,
+} from "./cache.js";
 import { Logger } from "./logger.js";
 import type { Config } from "./types.js";
 
@@ -20,6 +25,8 @@ export async function generate(config: Config, options: GenerateOptions = {}) {
     contentDir: config.contentDir,
     fileExtension: config.fileExtension,
     cache: config.cache,
+    cleanup: config.cleanup,
+    concurrency: config.concurrency,
     plugins: (config.plugins ?? []).map((p) => p.name),
     dryRun,
   });
@@ -50,6 +57,8 @@ export async function generate(config: Config, options: GenerateOptions = {}) {
     contentDir: config.contentDir,
     fileExtension: config.fileExtension,
     plugins,
+    concurrency: config.concurrency,
+    logger,
   });
 
   // Generate the content
@@ -61,11 +70,25 @@ export async function generate(config: Config, options: GenerateOptions = {}) {
   });
   await generator.run(pageTree, config.contentDir);
 
+  // Stale-file cleanup: anything the previous cache claimed but the new cache
+  // no longer does was deleted/renamed/moved in Notion since the last run.
+  let cleanupResult = { removed: [] as string[], skipped: [] as string[] };
+  if (config.cleanup && cache) {
+    cleanupResult = cleanupStaleFiles(cache, generator.newCache, {
+      contentDir: config.contentDir,
+      dryRun,
+      logger,
+    });
+  }
+
   const { written, skipped, filtered, errored, created, updated } =
     generator.stats;
   const extras = [
     filtered ? `${filtered} filtered` : null,
     errored ? `${errored} errored` : null,
+    cleanupResult.removed.length
+      ? `${cleanupResult.removed.length} ${dryRun ? "would be removed" : "removed"}`
+      : null,
   ]
     .filter(Boolean)
     .join(", ");
@@ -73,22 +96,47 @@ export async function generate(config: Config, options: GenerateOptions = {}) {
   if (dryRun) {
     logger.info(
       `Dry run: ${created} would be created, ${updated} would be updated, ${skipped} unchanged${extras ? `, ${extras}` : ""}. No files written.`,
-      { created, updated, skipped, filtered, errored, written },
+      {
+        created,
+        updated,
+        skipped,
+        filtered,
+        errored,
+        written,
+        wouldRemove: cleanupResult.removed.length,
+      },
     );
   } else if (cachePath) {
     saveCache(cachePath, generator.newCache);
     logger.info(
       `Done: ${written} written (${created} created, ${updated} updated), ${skipped} unchanged${extras ? `, ${extras}` : ""}. Cache saved to ${cachePath}`,
-      { created, updated, skipped, filtered, errored, written, cachePath },
+      {
+        created,
+        updated,
+        skipped,
+        filtered,
+        errored,
+        written,
+        removed: cleanupResult.removed.length,
+        cachePath,
+      },
     );
   } else {
     logger.info(
       `Done: ${written} written (${created} created, ${updated} updated), ${skipped} unchanged${extras ? `, ${extras}` : ""}.`,
-      { created, updated, skipped, filtered, errored, written },
+      {
+        created,
+        updated,
+        skipped,
+        filtered,
+        errored,
+        written,
+        removed: cleanupResult.removed.length,
+      },
     );
   }
 
-  return generator.stats;
+  return { ...generator.stats, removed: cleanupResult.removed.length };
 }
 
 export { Logger } from "./logger.js";

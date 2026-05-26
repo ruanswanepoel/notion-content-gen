@@ -71,7 +71,7 @@ export function computeNodeFilePath(
   const { baseName, ext } = parseTitleForExtension(title);
   const isLeaf = !hasChildren;
   const resolvedExt = isLeaf && ext ? ext : defaultExtension;
-  const slug = ext ? baseName : slugify(title);
+  const slug = ext ? slugify(baseName) : slugify(title);
   const childDir = path.join(parentDir, slug);
   const filePath = isLeaf
     ? path.join(parentDir, `${slug}.${resolvedExt}`)

@@ -13,73 +13,33 @@ order is given at the bottom under [Suggested priority order](#suggested-priorit
 
 ## Critical bugs & gaps (block the CI/CD story)
 
-These undermine the "trustworthy sync layer" framing and should land before any
-new features. They are the difference between a tool that *looks* CI-ready and
-one that actually is.
+All items in this section have been resolved. See git history for the
+implementation details. Summary of what landed:
 
-### Block & child-page pagination
-[`NotionParser.retrievePage`](src/notion_parser.ts) calls
-`blocks.children.list({ block_id })` once and uses the result directly. Notion
-paginates at 100 blocks per response — any page with more than 100 blocks
-(common for long docs) silently loses content past block 100, and any page with
-more than 100 children loses subpages. The cache then memoizes the truncated
-output, so subsequent runs reinforce the data loss.
-
-Fix: loop on `has_more` / `start_cursor` until exhausted. Apply the same
-treatment anywhere else the SDK paginates (page listings, property values).
-This is the single highest-impact correctness bug in the codebase.
-
-### Stale-file cleanup on page deletion
-When a Notion page is deleted (or moved, or renamed in a way that changes its
-slug), its previously-generated file remains on disk forever. The cache today
-only ever *adds* entries — nothing diffs the previous cache against the new
-one. For a CI-first tool whose output is published to a static site, this
-means deleted pages live on indefinitely.
-
-Fix: after a successful run, compute `oldCache.pages − newCache.pages` and
-`fs.rm` each removed file. Be conservative — only delete files that the cache
-previously recorded as ours, never anything else in `contentDir`. Consider
-gating with a `cleanup: true | false` config flag to opt out for users who
-write into `contentDir` from other sources.
-
-### Rate-limit / 429 handling
-Notion's documented sustained rate limit is ~3 requests/sec for integrations.
-There is no backoff anywhere. A tree of any non-trivial size will eventually
-get a 429 mid-build and the entire run will crash. CI runs that succeed today
-will start failing as the workspace grows, with no signal until they do.
-
-Fix: wrap `notionClient.*` calls in a retry-with-exponential-backoff helper.
-Respect `Retry-After` if Notion sends it. Pairs naturally with bounded
-concurrency (next item).
-
-### Bounded concurrency in tree build
-[`buildPageTree`](src/page_node.ts) is a sequential BFS — one request in flight
-at a time. For 200 pages at ~300ms each, that's a full minute of pure
-round-trips before any markdown is written. This is the dominant latency in
-practice.
-
-Fix: replace the for-loop with a worker pool of 3–5 concurrent fetches
-(dovetails with the ~3 req/s rate limit). Most of the BFS structure stays the
-same; only the dispatch changes. Stats and `onError` ordering must remain
-deterministic — collect results and merge in tree order.
-
-### Slug collisions silently overwrite
-Two sibling pages titled "Setup" both slugify to `setup.md`. The Generator
-writes the first, then the second writes over it. The cache keys by Notion ID,
-so on the next run both pages claim ownership of the same `filePath` and at
-least one will always be `unchanged === false` — the runs never settle.
-
-Fix: detect duplicates per-directory during tree build and pick a strategy
-(error out, append `-2`/`-3`, or suffix a short ID). Pick one, document it,
-and emit a warning either way so authors know to retitle in Notion.
-
-### `parseTitleForExtension` doesn't slugify the base
-[`util.ts:74`](src/util.ts#L74): `const slug = ext ? baseName : slugify(title);`.
-When the title has an extension, the base name is taken verbatim — so a page
-titled `My Config.json` produces a literal file `My Config.json` (space and
-capitalization preserved). Inconsistent with how every other title is handled.
-
-Fix: `const slug = ext ? slugify(baseName) : slugify(title);`.
+- **Block & child-page pagination** —
+  [`NotionParser.listAllBlockChildren`](src/notion_parser.ts) loops on
+  `has_more`/`next_cursor` until exhausted; pages with >100 blocks or >100
+  children are fully consumed.
+- **Stale-file cleanup on page deletion** —
+  [`cleanupStaleFiles`](src/cache.ts) diffs old vs. new cache after a
+  successful run and removes orphaned files (page deleted, renamed, or moved).
+  Only paths the previous cache recorded are eligible; anything else in
+  `contentDir` is left alone. Gated by the `cleanup` config option (default
+  `true`). Empty parent directories are pruned.
+- **Rate-limit / 429 handling** — every Notion call goes through
+  [`withRetry`](src/retry.ts) — exponential backoff with full jitter,
+  respects `Retry-After`, also retries 5xx and transient network errors.
+- **Bounded concurrency in tree build** —
+  [`buildPageTree`](src/page_node.ts) now runs a worker-pool BFS with default
+  concurrency 4 (configurable via the `concurrency` config option, range 1–20).
+  Stats and child-order remain deterministic regardless of worker scheduling.
+- **Slug collisions** — sibling slugs are reserved per-directory at
+  parent-visit time (in Notion's child order, before children are dispatched),
+  so collisions get deterministic `-2`/`-3`/… suffixes regardless of worker
+  scheduling. A warning is logged so authors know to retitle in Notion.
+- **`parseTitleForExtension`** — `computeNodeFilePath` now slugifies the
+  base name when the title carries an explicit extension, matching how every
+  other title is handled.
 
 ---
 
@@ -329,24 +289,23 @@ structures).
 
 ## Suggested priority order
 
-A recommended sequence, weighted by user-visible pain rather than category.
-Items 1–3 are blockers for honestly claiming "CI-ready"; items 4–6 are the
-foundation everything else builds on.
+The CI-readiness blockers (pagination, stale-file cleanup, rate-limit/concurrency,
+slug collisions, `parseTitleForExtension` fix) have all landed. What's left,
+roughly in order of impact:
 
-1. **Block & child-page pagination** — silent data loss is the worst possible
-   failure mode for a sync tool. Quick to fix, high-impact.
-2. **Stale-file cleanup** — required to claim the CI/CD story without
-   asterisks.
-3. **Rate-limit handling + bounded concurrency** — implement together. Without
-   these, the tool fails on real-world workspaces.
-4. **Promote Notion properties onto `PageNode`** (+ delete legacy types and
+1. **Promote Notion properties onto `PageNode`** (+ delete legacy types and
    SDK double-casts in the same pass). Unlocks cleaner presets and pays down
    the largest chunk of type debt in one move.
-5. **Slug collision detection.** Cheap; prevents another class of silent
-   overwrites.
-6. **Initial test harness** covering the plugin contract. Locks in the work
-   above before the user-facing plugin API has to absorb breaking changes.
+2. **Initial test harness** covering the plugin contract. Locks in the
+   behavioral guarantees (transform chaining, filter short-circuit, cache
+   hit/miss, dry-run no-write, `onError` suppression, slug collisions,
+   pagination, cleanup) before the user-facing plugin API has to absorb
+   breaking changes.
+3. **Architectural improvements** (filter earlier in pipeline, `{ dryRun }`
+   hook context, watch-mode file-watching, `onError` non-leaf handling) — each
+   independently small but they compound to make plugins easier to write.
+4. **Small fixes** (init template import, CLI version, main-entry re-exports,
+   dead utilities, synthetic Root node) — ride along with the next refactor.
 
-Multi-root and database support are deferrable until 1–6 land — neither
-solves a problem an existing user actually has, while 1–3 are blockers for
-trust.
+Multi-root and database support remain deferrable — neither solves a problem
+an existing user actually has.

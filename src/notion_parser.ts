@@ -5,6 +5,7 @@ import type {
   ListBlockChildrenResponseResults,
   MdStringObject,
 } from "notion-to-md/build/types/index.js";
+import { withRetry } from "./retry.js";
 
 export type RetrievePageOptions = {
   /** When true, skips the markdown conversion step. Useful for incremental sync. */
@@ -34,16 +35,17 @@ export class NotionParser {
    * Pass `{ skipMarkdown: true }` to skip the conversion step — the returned
    * `mdString` will be empty. Use {@link convertBlocksToMarkdown} to convert
    * later if needed.
+   *
+   * Block children are fully paginated — pages with more than 100 blocks are
+   * fetched in their entirety.
    */
   async retrievePage(
     pageId: string,
     options: RetrievePageOptions = {},
   ): Promise<RetrievedPage> {
-    const [pageResult, blocks] = await Promise.all([
-      this.notionClient.pages.retrieve({ page_id: pageId }),
-      this.notionClient.blocks.children.list({
-        block_id: pageId,
-      }) as unknown as Promise<{ results: BlockChildrenResponseExtended[] }>,
+    const [pageResult, blockResults] = await Promise.all([
+      withRetry(() => this.notionClient.pages.retrieve({ page_id: pageId })),
+      this.listAllBlockChildren(pageId),
     ]);
 
     if (!isFullPage(pageResult)) {
@@ -52,20 +54,49 @@ export class NotionParser {
       );
     }
 
-    const childPages = blocks.results.filter(
+    const childPages = blockResults.filter(
       (page) => page.type == "child_page",
     );
 
     const mdString: MdStringObject = options.skipMarkdown
       ? { parent: "" }
-      : await this.convertBlocksToMarkdown(blocks.results);
+      : await this.convertBlocksToMarkdown(blockResults);
 
     return {
       page: pageResult,
-      blocks,
+      blocks: { results: blockResults },
       mdString,
       childPages,
     };
+  }
+
+  /**
+   * Iterates through every page of `blocks.children.list` for the given block
+   * and returns the full concatenated list. Notion paginates at 100 entries
+   * per response, so this is required for any page with more than 100 blocks
+   * or 100 children.
+   */
+  async listAllBlockChildren(
+    blockId: string,
+  ): Promise<BlockChildrenResponseExtended[]> {
+    const all: BlockChildrenResponseExtended[] = [];
+    let cursor: string | undefined = undefined;
+    do {
+      const params: { block_id: string; start_cursor?: string } = {
+        block_id: blockId,
+      };
+      if (cursor) params.start_cursor = cursor;
+      const response = (await withRetry(() =>
+        this.notionClient.blocks.children.list(params),
+      )) as unknown as {
+        results: BlockChildrenResponseExtended[];
+        has_more: boolean;
+        next_cursor: string | null;
+      };
+      all.push(...response.results);
+      cursor = response.has_more ? (response.next_cursor ?? undefined) : undefined;
+    } while (cursor);
+    return all;
   }
 
   /**
