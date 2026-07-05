@@ -36,7 +36,7 @@ export type FumadocsPresetOptions = {
  * Bundles the plugins required to produce Fumadocs-compatible output:
  *
  * - YAML frontmatter (`title`, `description`, `icon`, `full`)
- * - `_meta.json` per directory, preserving Notion's page order
+ * - `meta.json` per directory, preserving Notion's page order
  * - MDX block transformations (callouts → `<Callout>`, toggles → `<Accordion>`)
  * - Draft filtering via a Notion checkbox property
  *
@@ -100,7 +100,9 @@ function writeMetaFiles(node: PageNode): void {
   const pages = node.childNodes
     .map((child) => slugForMeta(child))
     .filter((s): s is string => Boolean(s));
-  const metaPath = path.join(node.childDir, "_meta.json");
+  // Fumadocs reads a folder's meta from a file named `meta.json` (basename
+  // `meta`); an underscore-prefixed name is collected but never applied.
+  const metaPath = path.join(node.childDir, "meta.json");
   if (!fs.existsSync(node.childDir)) {
     fs.mkdirSync(node.childDir, { recursive: true });
   }
