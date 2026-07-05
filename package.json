@@ -47,7 +47,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "check": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
@@ -63,8 +64,11 @@
     "cli"
   ],
   "author": "Ruan Swanepoel",
-  "license": "ISC",
+  "license": "Apache-2.0",
   "packageManager": "pnpm@10.26.1",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@notionhq/client": "^5.4.0",
     "commander": "^14.0.2",

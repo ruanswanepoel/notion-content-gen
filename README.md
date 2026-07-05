@@ -494,4 +494,4 @@ See [CLAUDE.md](CLAUDE.md) for a deeper architectural walkthrough and
 
 ## License
 
-ISC.
+[Apache-2.0](LICENSE).
