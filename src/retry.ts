@@ -7,32 +7,51 @@ export type RetryOptions = {
   baseDelayMs?: number;
   /** Upper bound for any single sleep, in ms. Defaults to 30s. */
   maxDelayMs?: number;
+  /**
+   * Predicate deciding whether a thrown error is worth retrying. Defaults to
+   * the Notion-aware check (429 / 5xx / transient network codes). Non-Notion
+   * callers (e.g. the assets plugin's fetch wrapper) can supply their own.
+   */
+  isRetryable?: (err: unknown) => boolean;
+  /**
+   * Extracts a `Retry-After` delay (in ms) from an error, or `null` when the
+   * error carries none. Defaults to parsing a Notion `APIResponseError`'s
+   * `retry-after` header.
+   */
+  retryAfterMs?: (err: unknown) => number | null;
 };
 
-const DEFAULTS: Required<RetryOptions> = {
+const NUM_DEFAULTS = {
   maxAttempts: 5,
   baseDelayMs: 500,
   maxDelayMs: 30_000,
 };
 
 /**
- * Wraps a Notion API call with retry-on-429 / retry-on-5xx and exponential
- * backoff. Respects `Retry-After` when Notion sends it. Re-throws unrelated
- * errors immediately.
+ * Wraps an async call with retry-on-transient-failure and exponential backoff.
+ * By default it retries Notion 429 / 5xx / network errors and respects Notion's
+ * `Retry-After` header, but the retryability predicate and `Retry-After`
+ * extractor can both be overridden so the same backoff machinery can wrap
+ * arbitrary async work (e.g. asset downloads via `fetch`). Non-retryable errors
+ * are re-thrown immediately.
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
   options: RetryOptions = {},
 ): Promise<T> {
-  const { maxAttempts, baseDelayMs, maxDelayMs } = { ...DEFAULTS, ...options };
+  const maxAttempts = options.maxAttempts ?? NUM_DEFAULTS.maxAttempts;
+  const baseDelayMs = options.baseDelayMs ?? NUM_DEFAULTS.baseDelayMs;
+  const maxDelayMs = options.maxDelayMs ?? NUM_DEFAULTS.maxDelayMs;
+  const retryable = options.isRetryable ?? isRetryable;
+  const retryAfter = options.retryAfterMs ?? parseRetryAfter;
   let attempt = 0;
   while (true) {
     try {
       return await fn();
     } catch (err) {
       attempt++;
-      if (attempt >= maxAttempts || !isRetryable(err)) throw err;
-      const wait = computeDelay(err, attempt, baseDelayMs, maxDelayMs);
+      if (attempt >= maxAttempts || !retryable(err)) throw err;
+      const wait = computeDelay(err, attempt, baseDelayMs, maxDelayMs, retryAfter);
       await sleep(wait);
     }
   }
@@ -64,8 +83,9 @@ function computeDelay(
   attempt: number,
   base: number,
   max: number,
+  retryAfter: (err: unknown) => number | null,
 ): number {
-  const retryAfterMs = parseRetryAfter(err);
+  const retryAfterMs = retryAfter(err);
   if (retryAfterMs !== null) return Math.min(retryAfterMs, max);
   // Exponential backoff with full jitter.
   const exp = Math.min(max, base * 2 ** (attempt - 1));

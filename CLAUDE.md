@@ -43,6 +43,7 @@ src/
   types.ts                Shared types, ConfigSchema (Zod, single-root or roots[] form), Plugin type, NodeKind
   util.ts                 slugify, parseTitleForExtension, computeNodeFilePath, getTreeString, getPackageType
   plugins/
+    assets.ts             Downloads Notion CDN media (image/file/pdf/video/audio) and rewrites references to local/CDN paths
     frontmatter.ts        Generic YAML frontmatter plugin (caller supplies the extractor)
     mdx_blocks.ts         Notion callout → <Callout>; toggle → <Accordion>
   presets/
@@ -331,6 +332,60 @@ First-party plugins and presets live in-tree (under `src/plugins/` and
 `src/presets/`) and are published as subpath exports of the package. They use
 the same hook API as user plugins — no special access — and serve as canonical
 examples.
+
+### `notion-content-gen/plugins/assets`
+
+Downloads media served from Notion's CDN (behind signed, expiring S3 URLs) and
+rewrites the markdown references to durable local paths — or a user-supplied
+CDN base — so generated output is self-contained and safe to host statically.
+
+```ts
+import { assetsPlugin } from "notion-content-gen/plugins/assets";
+
+assetsPlugin({
+  outputDir: "public/notion-assets",   // where bytes land (default "public/notion-assets")
+  publicPath: "/notion-assets",         // reference prefix (URL or absolute path); omit for page-relative
+  includeExternal: false,               // also pull permanent external URLs (default false)
+  blockTypes: ["image", "file", "pdf", "video", "audio"], // default: all five
+  concurrency: 4,                       // max concurrent downloads, independent of tree-build (default 4)
+  naming: "blockId",                    // "blockId" (default) | "urlHash" | "original"
+});
+```
+
+**How it works.** Like `mdx-blocks`, it registers `notion-to-md` custom
+transformers in `setup` (no new core hook). Each transformer sees the
+fully-typed block with its unescaped URL, downloads the bytes through a shared
+concurrency-bounded queue, and returns the replacement markdown. Because the
+transformer runs *during* `convertBlocksToMarkdown` on the tree-build worker
+pool, downloads inherit the existing retry/backoff discipline (`withRetry` is
+generalized to accept a fetch-aware retryability predicate).
+
+**Filename stability.** The default `blockId` naming derives the filename from
+the (stable) block id plus an extension inferred from the URL *path* — never
+the expiring query string — so re-runs are idempotent: if the file is already
+on disk the download is skipped. `urlHash` content-addresses by hashing the URL
+path; `original` keeps the Notion filename and de-dupes collisions with a short
+block-id fragment. Extensions come from the URL path; a path with no extension
+yields an extension-less filename.
+
+**Reference resolution.** With `publicPath` set, references become
+`${publicPath}/<file>` (final, emitted by the transformer). Without it, the
+transformer emits a marker that a `transform` hook rewrites to a path relative
+to each page's output file — portable across hosts.
+
+**Dry-run.** Skips the actual download and disk write but still rewrites
+references, so `--dry-run` previews correctly.
+
+**Known limitations.**
+- **Icons & covers** live on the page object, not the block stream, so they're
+  out of scope and left untouched. Handle them in a `transform` pass if needed.
+- **Unchanged pages** skip markdown conversion (and this transformer), so a
+  hand-deleted asset isn't re-fetched until the page's `last_edited_time`
+  changes — mirroring how core skips unchanged page writes.
+- **Orphaned assets**: core `cleanupStaleFiles` only tracks page output files,
+  so assets for deleted/renamed pages accumulate in `outputDir`. Periodically
+  wipe `outputDir` for a clean rebuild (v1 accepts orphan accumulation rather
+  than teaching core cleanup about plugin-owned files).
 
 ### `notion-content-gen/plugins/frontmatter`
 
