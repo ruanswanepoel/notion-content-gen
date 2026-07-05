@@ -20,8 +20,9 @@ const config = {
 ${packageType == "module" ? "export default config;" : "module.exports = config;"}
 `;
 
-// TODO: The type here may need to change
-const DEFAULT_TS_CONFIG = `import type { Config } from "./src/types";
+const DEFAULT_TS_CONFIG = `import "dotenv/config";
+import type { Config } from "notion-content-gen";
+
 const config: Config = {
   notionToken: process.env.NOTION_SECRET!,
   notionPageId: "",
