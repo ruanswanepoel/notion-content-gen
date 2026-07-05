@@ -1,7 +1,19 @@
 {
   "name": "notion-content-gen",
   "version": "0.0.1",
+  "description": "CLI tool that fetches a Notion page tree (or wiki) and writes each page as a static file on disk, preserving the Notion hierarchy as nested directories.",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ruanswanepoel/notion-content-gen.git"
+  },
+  "homepage": "https://github.com/ruanswanepoel/notion-content-gen#readme",
+  "bugs": {
+    "url": "https://github.com/ruanswanepoel/notion-content-gen/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "notion-content-gen": "./dist/bin/cli.js"
   },
@@ -40,10 +52,17 @@
   "scripts": {
     "check": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "build": "tsc",
-    "test": "node --import tsx --test tests/*.test.ts"
+    "test": "node --import tsx --test tests/*.test.ts",
+    "prepublishOnly": "pnpm check && pnpm test && pnpm build"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "notion",
+    "notion-to-md",
+    "static-site",
+    "content",
+    "cli"
+  ],
+  "author": "Ruan Swanepoel",
   "license": "ISC",
   "packageManager": "pnpm@10.26.1",
   "dependencies": {
