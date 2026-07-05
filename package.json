@@ -1,6 +1,6 @@
 {
   "name": "notion-content-gen",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "CLI tool that fetches a Notion page tree (or wiki) and writes each page as a static file on disk, preserving the Notion hierarchy as nested directories.",
   "type": "module",
   "repository": {
