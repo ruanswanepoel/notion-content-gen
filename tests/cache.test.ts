@@ -15,7 +15,7 @@ test("cache hit: unchanged page is skipped and not rewritten", async () => {
     ]);
 
     // Seed the cache and pre-write the file as if a prior run produced it.
-    const filePath = path.join(dir, "root.md");
+    const filePath = path.join(dir, "index.md");
     fs.writeFileSync(filePath, "PRESERVED CONTENT");
     const cache: CacheRoot = {
       entries: {
@@ -58,7 +58,7 @@ test("cache miss: changed last_edited_time triggers rewrite", async () => {
       },
     ]);
 
-    const filePath = path.join(dir, "root.md");
+    const filePath = path.join(dir, "index.md");
     fs.writeFileSync(filePath, "STALE");
     const cache: CacheRoot = {
       entries: {
@@ -92,7 +92,7 @@ test("cache miss: missing output file triggers rewrite even if time matches", as
       { id: "root", title: "Root", markdown: "# fresh", children: [] },
     ]);
 
-    const filePath = path.join(dir, "root.md");
+    const filePath = path.join(dir, "index.md");
     const cache: CacheRoot = {
       entries: {
         root: {

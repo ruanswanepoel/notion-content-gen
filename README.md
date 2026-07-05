@@ -167,9 +167,15 @@ const config: Config = {
 | `cache`         | `boolean \| string`        | `true`      | Incremental sync: `true`, `false`, or a custom cache-file path. |
 | `cleanup`       | `boolean`                  | `true`      | Delete output files for pages removed/renamed in Notion. |
 | `concurrency`   | `number` (1–20)            | `4`         | Max concurrent Notion fetches during tree build. |
+| `rootDir`       | `boolean \| string`        | `false`     | How the root maps onto `contentDir` (per-root overridable). `false` → flat; `true` → a folder named after the root's title; a string → a folder with that literal name. See [File naming rules](#file-naming-rules). |
 | `plugins`       | `Plugin[]`                 | `[]`        | Hook plugins (see below). Passed through as-is; not Zod-validated. |
 
-A `RootConfig` is `{ notionPageId, contentDir?, fileExtension? }`.
+A `RootConfig` is `{ notionPageId, contentDir?, fileExtension?, rootDir? }`.
+
+> **Multi-root:** each root must resolve to a distinct output directory. Two
+> roots sharing a `contentDir` while both flat (the default) is rejected at
+> config load, since their files would intermix and cross-root slug clashes
+> aren't deduped. Give each root its own `contentDir`, or a named `rootDir`.
 
 ## CLI commands
 
@@ -269,6 +275,15 @@ disabled. Disable it if something else also writes into `contentDir`.
 
 ## File naming rules
 
+- The **root** maps onto `contentDir` according to the `rootDir` option:
+  - `false` *(default)* — flat: the root's children land in `contentDir` itself
+    (no folder named after the root), and the root page's own body — if any —
+    writes to `contentDir/index.md`. A wiki root is directory-only, so its items
+    land straight in `contentDir`.
+  - `true` — the root gets its own directory named after its real Notion title
+    (slugified): body → `contentDir/<title>/index.md`, children nested inside.
+  - a string — same as `true`, but with that literal name (slugified), e.g.
+    `rootDir: "handbook"` → `contentDir/handbook/…`.
 - Leaf pages → `slug.md`.
 - Pages with children → `slug/index.md` (a directory plus its index file).
 - **Wiki nodes are directory-only** — no file is written for the wiki itself.
@@ -411,7 +426,7 @@ recoverable post-conversion and are left as a documented limitation.
 ### `notion-content-gen/presets/fumadocs`
 
 Bundles everything needed for [Fumadocs](https://fumadocs.dev)-compatible output:
-YAML frontmatter from page properties, `_meta.json` per non-leaf directory (in
+YAML frontmatter from page properties, `meta.json` per non-leaf directory (in
 Notion order), MDX block transforms, and draft filtering via a checkbox property.
 
 ```ts

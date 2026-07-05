@@ -36,6 +36,7 @@ type ResolvedRoot = {
   notionPageId: string;
   contentDir: string;
   fileExtension: string;
+  rootDir: boolean | string;
 };
 
 export async function generate(config: Config, options: GenerateOptions = {}) {
@@ -90,6 +91,12 @@ export async function generate(config: Config, options: GenerateOptions = {}) {
   };
   let aggregateRemoved = 0;
 
+  // Guards against two roots resolving to the same output directory. The
+  // schema catches statically-knowable collisions; this also covers
+  // `rootDir: true`, whose folder name is only known once the root's title is
+  // fetched. Maps effective output dir → the root id that claimed it.
+  const claimedDirs = new Map<string, string>();
+
   // Each root is processed sequentially. They typically share a Notion
   // workspace and would compete for rate limits if run in parallel —
   // sequential is calmer and keeps logs interpretable per-root.
@@ -115,7 +122,20 @@ export async function generate(config: Config, options: GenerateOptions = {}) {
       concurrency: config.concurrency,
       logger,
       rootKind,
+      rootDir: root.rootDir,
     });
+
+    // The root node's resolved `childDir` is this root's effective output
+    // directory (contentDir when flat, contentDir/<name> when named). Reject a
+    // second root landing on the same one before writing anything.
+    const effectiveDir = pageTree.childDir ?? root.contentDir;
+    const claimant = claimedDirs.get(effectiveDir);
+    if (claimant && claimant !== root.notionPageId) {
+      throw new Error(
+        `Roots "${claimant}" and "${root.notionPageId}" both write to "${effectiveDir}". Give each root a distinct contentDir or a named rootDir.`,
+      );
+    }
+    claimedDirs.set(effectiveDir, root.notionPageId);
 
     logger.debug(`Page tree for ${root.notionPageId}:\n${getTreeString(pageTree)}`);
 
@@ -233,6 +253,7 @@ function normalizeRoots(config: Config): ResolvedRoot[] {
       notionPageId: root.notionPageId,
       contentDir: root.contentDir ?? config.contentDir,
       fileExtension: root.fileExtension ?? config.fileExtension,
+      rootDir: root.rootDir ?? config.rootDir,
     }));
   }
   if (!config.notionPageId) {
@@ -247,6 +268,7 @@ function normalizeRoots(config: Config): ResolvedRoot[] {
       notionPageId: config.notionPageId,
       contentDir: config.contentDir,
       fileExtension: config.fileExtension,
+      rootDir: config.rootDir,
     },
   ];
 }

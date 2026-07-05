@@ -6,6 +6,8 @@ import type {
   PageObjectResponse,
 } from "@notionhq/client";
 import z from "zod";
+import path from "path";
+import { slugify } from "./util.js";
 
 // Re-exported SDK types — surfaced here so plugin authors importing from
 // `notion-content-gen/types` get the canonical Notion shapes without having
@@ -105,6 +107,7 @@ const RootSchema = z.object({
   notionPageId: z.string().min(1, "root.notionPageId is required"),
   contentDir: z.string().optional(),
   fileExtension: z.string().optional(),
+  rootDir: z.union([z.boolean(), z.string()]).optional(),
 });
 
 export type RootConfig = z.infer<typeof RootSchema>;
@@ -133,6 +136,17 @@ export const ConfigSchema = z
      */
     concurrency: z.number().int().min(1).max(20).default(4),
     /**
+     * How the root maps onto `contentDir`. Per-root overridable.
+     * - `false` (default): flat — the root's children land directly in
+     *   `contentDir` and the root page's own body writes to
+     *   `contentDir/index.<ext>`. No folder named after the root.
+     * - `true`: the root gets its own directory named after its real Notion
+     *   title (slugified), e.g. `contentDir/<title>/index.<ext>`.
+     * - a string: the root gets a directory with that literal name (slugified),
+     *   e.g. `rootDir: "handbook"` → `contentDir/handbook/…`.
+     */
+    rootDir: z.union([z.boolean(), z.string()]).default(false),
+    /**
      * Multi-root: a list of independent Notion roots to sync in a single run.
      * Each root gets its own `contentDir` and (optionally) `fileExtension`,
      * falling back to the top-level defaults if omitted. Mutually exclusive
@@ -155,6 +169,34 @@ export const ConfigSchema = z
         code: "custom",
         message:
           "Config cannot supply both `notionPageId` and `roots` — pick one form.",
+      });
+    }
+
+    // Two roots writing into the same output directory would intermix files,
+    // and cross-root slug collisions aren't deduped (slug reservation is
+    // per-root), so they'd silently overwrite. Reject that up front. `rootDir:
+    // true` names the folder after the (not-yet-fetched) Notion title, so its
+    // final directory can't be known here — those are checked at run time in
+    // `generate()`; everything statically knowable is checked now.
+    if (hasMulti) {
+      const seen = new Map<string, number>();
+      c.roots!.forEach((r, i) => {
+        const rootDir = r.rootDir ?? c.rootDir;
+        if (rootDir === true) return; // title-derived — validated at run time
+        const contentDir = r.contentDir ?? c.contentDir;
+        const dir = rootDir
+          ? path.join(contentDir, slugify(rootDir))
+          : path.normalize(contentDir);
+        const first = seen.get(dir);
+        if (first !== undefined) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["roots", i],
+            message: `roots[${first}] and roots[${i}] both write to "${dir}". Give each root a distinct contentDir or a named rootDir.`,
+          });
+        } else {
+          seen.set(dir, i);
+        }
       });
     }
   });

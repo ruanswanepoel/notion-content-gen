@@ -1,4 +1,5 @@
 import fs from "fs";
+import path from "path";
 import type {
   BlockObjectResponse,
   ChildDatabaseBlockObjectResponse,
@@ -67,6 +68,15 @@ export type PageNode = {
   mdString: string;
   /** Source `child_page` block this node was created from. `null` on root and wiki items. */
   childPageBlock: ChildPageBlockObjectResponse | null;
+  /**
+   * True when this page node was discovered as a wiki database item (via the
+   * data-source query) rather than a `child_page` block. Its hierarchy is
+   * authoritative from the database `parent` field, so `visitPage` must not
+   * re-derive children from the item's own `child_page`/`child_database`
+   * blocks — in Notion those blocks are the very same sub-items and would
+   * otherwise be materialized a second time (slug collisions + duplicates).
+   */
+  wikiItem?: boolean;
 
   // --- Wiki-kind fields (populated when kind === "wiki") ---
   /** Full database object. Populated only on wiki nodes. */
@@ -106,6 +116,13 @@ export type BuildPageTreeOptions = {
    * avoid an extra probe.
    */
   rootKind?: NodeKind;
+  /**
+   * How the root maps onto `contentDir`. `false` (default) → flat; `true` →
+   * a directory named after the root's real title; a string → a directory
+   * with that literal name. Strings and titles are slugified. See
+   * {@link rootFolderSegment}.
+   */
+  rootDir?: boolean | string;
 };
 
 function makePageNode(init: {
@@ -114,6 +131,7 @@ function makePageNode(init: {
   parentNode: PageNode | null;
   childPageBlock: ChildPageBlockObjectResponse | null;
   resolvedTitle: string;
+  wikiItem?: boolean;
 }): PageNode {
   return {
     kind: "page",
@@ -129,6 +147,7 @@ function makePageNode(init: {
     parentNode: init.parentNode,
     childNodes: [],
     resolvedTitle: init.resolvedTitle,
+    ...(init.wikiItem ? { wikiItem: true } : {}),
   };
 }
 
@@ -207,6 +226,7 @@ export async function buildPageTree(
     concurrency = 4,
     logger,
     rootKind = "page",
+    rootDir = false,
   } = options;
 
   const rootNode: PageNode =
@@ -239,6 +259,7 @@ export async function buildPageTree(
         plugins,
         usedSlugsByDir,
         logger,
+        rootDir,
       );
     }
     return visitPage(
@@ -250,6 +271,7 @@ export async function buildPageTree(
       plugins,
       usedSlugsByDir,
       logger,
+      rootDir,
     );
   };
 
@@ -289,6 +311,7 @@ async function visitPage(
   plugins: Plugin[],
   usedSlugsByDir: Map<string, Set<string>>,
   logger: Logger | undefined,
+  rootDir: boolean | string,
 ): Promise<PageNode[]> {
   const retrieved = await notion.retrievePage(node.notionId, {
     skipMarkdown: true,
@@ -308,20 +331,36 @@ async function visitPage(
   }
 
   const parentDir = node.parentNode?.childDir ?? contentDir;
-  // Wiki items pre-attach their nested-item children via `visitWiki` before
-  // the worker pool dispatches the item itself. Honor those pre-built
-  // children so the item resolves as a directory-with-index, not a leaf.
-  const hasChildren =
-    retrieved.childPages.length > 0 ||
-    retrieved.childDatabases.length > 0 ||
-    node.childNodes.length > 0;
-  const titleForPath = node.resolvedTitle ?? node.notionTitle;
-  const { filePath, childDir } = computeNodeFilePath(
-    titleForPath,
-    parentDir,
-    hasChildren,
-    fileExtension,
-  );
+  // Wiki items get their hierarchy from the database query (pre-attached as
+  // `childNodes` by `visitWiki`), not from their block stream. In Notion a
+  // wiki entry's sub-pages surface *both* as database rows and as `child_page`
+  // blocks here, so deriving children from blocks would double-count them.
+  // For wiki items, trust only the pre-built `childNodes`.
+  const hasChildren = node.wikiItem
+    ? node.childNodes.length > 0
+    : retrieved.childPages.length > 0 ||
+      retrieved.childDatabases.length > 0 ||
+      node.childNodes.length > 0;
+
+  let filePath: string;
+  let childDir: string;
+  if (node.parentNode === null) {
+    // The root's mapping onto `contentDir` is controlled by `rootDir`:
+    //   flat (default) → children in `contentDir`, body → contentDir/index.<ext>
+    //   named          → children in contentDir/<name>, body → …/<name>/index.<ext>
+    // Either way the root is treated as a directory-with-index.
+    const segment = rootFolderSegment(rootDir, node.notionTitle);
+    childDir = segment ? path.join(contentDir, segment) : contentDir;
+    filePath = path.join(childDir, `index.${fileExtension}`);
+  } else {
+    const titleForPath = node.resolvedTitle ?? node.notionTitle;
+    ({ filePath, childDir } = computeNodeFilePath(
+      titleForPath,
+      parentDir,
+      hasChildren,
+      fileExtension,
+    ));
+  }
   node.filePath = filePath;
   node.childDir = childDir;
 
@@ -345,6 +384,12 @@ async function visitPage(
   } else {
     node.mdString = await notion.convertBlocksToMarkdown(retrieved.blocks);
   }
+
+  // Wiki items own no block-derived children: their sub-items were already
+  // materialized (and enqueued) by `visitWiki` from the database `parent`
+  // graph. Re-deriving from `child_page`/`child_database` blocks here would
+  // duplicate every sub-page. Content blocks were still converted above.
+  if (node.wikiItem) return [];
 
   // Reserve sibling slugs deterministically in Notion's declaration order.
   // Pages first (matches block order roughly), then databases — both share
@@ -413,6 +458,7 @@ async function visitWiki(
   plugins: Plugin[],
   usedSlugsByDir: Map<string, Set<string>>,
   logger: Logger | undefined,
+  rootDir: boolean | string,
 ): Promise<PageNode[]> {
   const retrieved = await notion.retrieveDatabase(node.notionId);
   node.database = retrieved.database;
@@ -427,13 +473,21 @@ async function visitWiki(
 
   // Wiki nodes are directory-only — childDir is set, filePath stays undefined.
   const parentDir = node.parentNode?.childDir ?? contentDir;
-  const titleForPath = node.resolvedTitle ?? node.notionTitle;
-  const { childDir } = computeNodeFilePath(
-    titleForPath,
-    parentDir,
-    true /* hasChildren — wiki always represents a directory */,
-    fileExtension,
-  );
+  let childDir: string;
+  if (node.parentNode === null) {
+    // A wiki root maps onto `contentDir` per `rootDir` (flat by default, or a
+    // named folder). The wiki itself writes no file — only `childDir` matters.
+    const segment = rootFolderSegment(rootDir, node.notionTitle);
+    childDir = segment ? path.join(contentDir, segment) : contentDir;
+  } else {
+    const titleForPath = node.resolvedTitle ?? node.notionTitle;
+    ({ childDir } = computeNodeFilePath(
+      titleForPath,
+      parentDir,
+      true /* hasChildren — wiki always represents a directory */,
+      fileExtension,
+    ));
+  }
   node.childDir = childDir;
 
   if (!(await runFilter(node, plugins))) {
@@ -495,6 +549,7 @@ async function visitWiki(
         parentNode,
         childPageBlock: null,
         resolvedTitle,
+        wikiItem: true,
       });
       // Pre-populate the page object so the page-visit only needs to fetch
       // blocks for content. Properties / icon / last_edited_time come from
@@ -643,6 +698,26 @@ function appendSlugSuffix(title: string, n: number): string {
     return `${title.slice(0, dot)}-${n}${title.slice(dot)}`;
   }
   return `${title}-${n}`;
+}
+
+/**
+ * Resolves the directory segment the root node should occupy under
+ * `contentDir`, or `undefined` when the root maps flat onto `contentDir`.
+ *
+ * - `false` / falsy → flat (returns `undefined`)
+ * - `true` → slug of the root's real Notion `title`
+ * - string → slug of the given literal name
+ *
+ * A name that slugs to empty (e.g. an all-emoji title) falls back to flat so
+ * the root never resolves to `contentDir/`.
+ */
+function rootFolderSegment(
+  rootDir: boolean | string,
+  title: string,
+): string | undefined {
+  if (!rootDir) return undefined;
+  const slug = slugify(rootDir === true ? title : rootDir);
+  return slug || undefined;
 }
 
 /** Returns `false` if any plugin's `filter` hook returns `false`. */

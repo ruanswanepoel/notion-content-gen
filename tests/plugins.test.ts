@@ -47,10 +47,10 @@ test("filter short-circuit: returning false skips node and descendants pre-fetch
   try {
     assert.equal(gen.stats.filtered, 1);
     assert.equal(gen.stats.written, 2);
-    // Root has children so it lives at <dir>/root/index.md and siblings nest in there.
-    assert.ok(fs.existsSync(path.join(dir, "root", "keep.md")));
-    assert.ok(!fs.existsSync(path.join(dir, "root", "skip.md")));
-    assert.ok(!fs.existsSync(path.join(dir, "root", "skip", "nested.md")));
+    // Root maps onto contentDir: its body → <dir>/index.md and siblings land in <dir>.
+    assert.ok(fs.existsSync(path.join(dir, "keep.md")));
+    assert.ok(!fs.existsSync(path.join(dir, "skip.md")));
+    assert.ok(!fs.existsSync(path.join(dir, "skip", "nested.md")));
 
     // The skipped page itself is fetched (the filter needs its properties),
     // but its descendants are never enqueued — `nested` should not appear.
@@ -76,8 +76,8 @@ test("transform chaining: each plugin sees the previous plugin's output", async 
     ],
   });
   try {
-    // Root is a leaf here (no children), so its file is at <dir>/root.md.
-    const content = fs.readFileSync(path.join(dir, "root.md"), "utf-8");
+    // Root is a leaf here (no children), so its body writes to <dir>/index.md.
+    const content = fs.readFileSync(path.join(dir, "index.md"), "utf-8");
     assert.equal(content, "[p2][p1]body[/p2]");
     assert.equal(gen.stats.written, 1);
   } finally {
@@ -127,7 +127,7 @@ test("dry-run: no files written, no cache file produced, afterAll still runs wit
     assert.ok(transformCalled, "transform runs in dry-run");
     assert.deepEqual(afterAllCtx, { dryRun: true }, "afterAll runs with dryRun=true");
     assert.equal(onFileWrittenCalled, false, "onFileWritten skipped in dry-run");
-    assert.equal(fs.existsSync(path.join(dir, "root.md")), false);
+    assert.equal(fs.existsSync(path.join(dir, "index.md")), false);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -181,15 +181,15 @@ test("onError suppression during generation increments errored and continues to 
     });
 
     // Force a's destination to be a directory so writeFileSync explodes.
-    fs.mkdirSync(path.join(dir, "root", "a.md"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "a.md"), { recursive: true });
 
     const gen = new Generator({ plugins: [plugin] });
     await gen.run(tree, dir);
 
     assert.equal(gen.stats.errored, 1);
     // b was a sibling at the same depth — should still be written.
-    assert.ok(fs.existsSync(path.join(dir, "root", "b.md")));
-    assert.equal(fs.readFileSync(path.join(dir, "root", "b.md"), "utf-8"), "# b");
+    assert.ok(fs.existsSync(path.join(dir, "b.md")));
+    assert.equal(fs.readFileSync(path.join(dir, "b.md"), "utf-8"), "# b");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -217,7 +217,7 @@ test("onError suppression on a non-leaf drops its children too", async () => {
     });
 
     // Force the parent's index.md to fail by pre-creating its path as a directory.
-    fs.mkdirSync(path.join(dir, "root", "parent", "index.md"), {
+    fs.mkdirSync(path.join(dir, "parent", "index.md"), {
       recursive: true,
     });
 
@@ -227,7 +227,7 @@ test("onError suppression on a non-leaf drops its children too", async () => {
     // 1 for parent write failure + 1 for the dropped child descendant.
     assert.equal(gen.stats.errored, 2);
     assert.ok(
-      fs.existsSync(path.join(dir, "root", "sibling.md")),
+      fs.existsSync(path.join(dir, "sibling.md")),
       "sibling subtree still ran",
     );
   } finally {

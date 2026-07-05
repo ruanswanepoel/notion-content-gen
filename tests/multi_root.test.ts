@@ -28,6 +28,7 @@ test("multi-root: each root writes to its own contentDir", async () => {
       cache: false,
       cleanup: true,
       concurrency: 4,
+      rootDir: false,
       roots: [
         { notionPageId: "docs", contentDir: root1 },
         { notionPageId: "blog", contentDir: root2 },
@@ -40,11 +41,11 @@ test("multi-root: each root writes to its own contentDir", async () => {
     });
 
     assert.equal(stats.written, 2);
-    // Root nodes use the synthetic "Root" name for path resolution by
-    // convention, regardless of the real title (which is preserved on the
-    // node for plugins). The contentDir is what disambiguates roots.
-    assert.equal(fs.readFileSync(path.join(root1, "root.md"), "utf-8"), "# docs");
-    assert.equal(fs.readFileSync(path.join(root2, "root.md"), "utf-8"), "# blog");
+    // Each root maps directly onto its contentDir: a leaf root's body writes
+    // to <contentDir>/index.md, regardless of the real page title (which is
+    // preserved on the node for plugins).
+    assert.equal(fs.readFileSync(path.join(root1, "index.md"), "utf-8"), "# docs");
+    assert.equal(fs.readFileSync(path.join(root2, "index.md"), "utf-8"), "# blog");
   } finally {
     fs.rmSync(root1, { recursive: true, force: true });
     fs.rmSync(root2, { recursive: true, force: true });
@@ -69,6 +70,7 @@ test("multi-root: cache is keyed by rootId; per-root cache hit/miss is independe
       cache: cachePath,
       cleanup: true,
       concurrency: 4,
+      rootDir: false,
       roots: [
         { notionPageId: "a", contentDir: dir1 },
         { notionPageId: "b", contentDir: dir2 },
@@ -122,6 +124,7 @@ test("multi-root: cleanup is scoped per-root", async () => {
       cache: cachePath,
       cleanup: true,
       concurrency: 4,
+      rootDir: false,
       roots: [
         { notionPageId: "a-root", contentDir: dir1 },
         { notionPageId: "b-root", contentDir: dir2 },
@@ -132,8 +135,8 @@ test("multi-root: cleanup is scoped per-root", async () => {
       notion: asNotionParser(fake),
     });
 
-    const aLeafPath = path.join(dir1, "root", "leaf-a.md");
-    const bLeafPath = path.join(dir2, "root", "leaf-b.md");
+    const aLeafPath = path.join(dir1, "leaf-a.md");
+    const bLeafPath = path.join(dir2, "leaf-b.md");
     assert.ok(fs.existsSync(aLeafPath));
     assert.ok(fs.existsSync(bLeafPath));
 
@@ -172,6 +175,7 @@ test("multi-root: setup fires once, beforeAll/afterAll fire per root", async () 
       cache: false,
       cleanup: false,
       concurrency: 4,
+      rootDir: false,
       roots: [
         { notionPageId: "a", contentDir: dir1 },
         { notionPageId: "b", contentDir: dir2 },
@@ -223,6 +227,7 @@ test("multi-root: single-root legacy form still works", async () => {
       cache: false,
       cleanup: true,
       concurrency: 4,
+      rootDir: false,
     };
 
     const stats = await generate(config, {
@@ -230,7 +235,7 @@ test("multi-root: single-root legacy form still works", async () => {
       notion: asNotionParser(fake),
     });
     assert.equal(stats.written, 1);
-    assert.equal(fs.readFileSync(path.join(dir, "root.md"), "utf-8"), "# r");
+    assert.equal(fs.readFileSync(path.join(dir, "index.md"), "utf-8"), "# r");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -249,14 +254,15 @@ test("multi-root: per-root fileExtension overrides the top-level default", async
       cache: false,
       cleanup: false,
       concurrency: 4,
+      rootDir: false,
       roots: [{ notionPageId: "page", contentDir: dir, fileExtension: "mdx" }],
     };
     await generate(config, {
       logger: silentLogger(),
       notion: asNotionParser(fake),
     });
-    assert.ok(fs.existsSync(path.join(dir, "root.mdx")));
-    assert.ok(!fs.existsSync(path.join(dir, "root.md")));
+    assert.ok(fs.existsSync(path.join(dir, "index.mdx")));
+    assert.ok(!fs.existsSync(path.join(dir, "index.md")));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

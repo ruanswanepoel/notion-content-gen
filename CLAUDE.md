@@ -47,7 +47,7 @@ src/
     frontmatter.ts        Generic YAML frontmatter plugin (caller supplies the extractor)
     mdx_blocks.ts         Notion callout → <Callout>; toggle → <Accordion>
   presets/
-    fumadocs.ts           Fumadocs preset: bundles draft filter + mdx-blocks + frontmatter + _meta.json
+    fumadocs.ts           Fumadocs preset: bundles draft filter + mdx-blocks + frontmatter + meta.json
 ```
 
 ## How it works
@@ -57,11 +57,16 @@ src/
 3. For each root, the orchestrator calls `NotionParser.classifyNode(id)` (one extra API call per root, one-time) to determine whether the root is a regular page or a wiki, then dispatches to `buildPageTree(rootId, notion, { cache: rootSlice, contentDir, fileExtension, plugins, concurrency, logger, rootKind })`.
 4. `buildPageTree` runs a BFS worker pool (default 4 concurrent fetches, configurable via `concurrency`). Each node is visited according to its `kind`:
    - **Page nodes** call `notionParser.retrievePage()`, paginating block children. `child_page` blocks → new page children. `child_database` blocks → new wiki children. When a cache is provided, retrieval skips markdown conversion, resolves the expected output path, and marks the node `unchanged` if `last_edited_time` + path match the cache and the file still exists. Otherwise the markdown is converted in-place.
-   - **Wiki nodes** call `notionParser.retrieveDatabase()` which under the hood paginates `dataSources.query` for every data source attached to the database and returns the flat list of page objects. The tree builder reconstructs the wiki hierarchy by walking each page's `parent` field — top-level items live under the wiki, nested items live under whichever wiki item's id matches `parent.page_id`. Each wiki item becomes a `kind: "page"` node with its page object pre-populated (no extra `pages.retrieve` round-trip), and the worker pool fetches each item's blocks for content.
+   - **Wiki nodes** call `notionParser.retrieveDatabase()` which under the hood paginates `dataSources.query` for every data source attached to the database and returns the flat list of page objects. The tree builder reconstructs the wiki hierarchy by walking each page's `parent` field — top-level items live under the wiki, nested items live under whichever wiki item's id matches `parent.page_id`. Each wiki item becomes a `kind: "page"` node (flagged `wikiItem: true`) with its page object pre-populated (no extra `pages.retrieve` round-trip), and the worker pool fetches each item's blocks for content. **Wiki items get their hierarchy solely from the database `parent` graph**: when the worker later visits a wiki item as a page node, it does *not* re-derive children from that item's `child_page`/`child_database` blocks. In Notion a wiki entry's sub-pages surface both as data-source rows and as `child_page` blocks, so deriving from blocks would materialize every sub-page twice (slug collisions + `-2` duplicate files).
 5. Sibling slug collisions are resolved deterministically at parent-visit time (`-2`, `-3`, … suffixes) so worker scheduling doesn't change the output. Per-node retrieval errors are routed to plugin `onError` hooks; suppressed non-root failures are dropped from their parent's `childNodes`. All Notion calls run through `withRetry` (exponential backoff with jitter; respects `Retry-After` on 429s).
 6. `Generator.run(tree, contentDir)` runs the full lifecycle: `beforeAll` hooks → `generateContent` recursion → `afterAll` hooks. At each node:
    - `filter` hooks run first — returning `false` skips the node and its children
    - **Wiki nodes** are directory-only: core mkdirs `childDir` (so the directory exists for items below) and recurses; no file is written for the wiki itself
+   - **The root node's mapping onto `contentDir`** (`parentNode === null`) is controlled by the `rootDir` config option (`boolean | string`, default `false`), resolved by `rootFolderSegment(rootDir, title)` in `page_node.ts`:
+     - `false` (flat, default): `childDir` is `contentDir` itself — children land directly in `contentDir`, root body → `contentDir/index.<ext>`. A wiki root writes no file.
+     - `true`: `childDir` is `contentDir/<slug(realTitle)>` — the root gets its own folder named after its fetched title (the synthetic `"Root"` placeholder is never used for paths).
+     - string: `childDir` is `contentDir/<slug(string)>` — a folder with that literal (slugified) name.
+     - The root is always treated as a directory-with-index (body → `<childDir>/index.<ext>`), regardless of leaf/non-leaf.
    - **Page nodes** (incl. wiki items) follow the standard rules:
      - Leaf pages → `slug.md` (or title-derived extension if the page title includes one)
      - Pages with children → `slug/index.md`
@@ -419,7 +424,7 @@ Maps Notion block types to MDX components:
 Bundles the plugins required for Fumadocs-compatible output:
 
 - YAML frontmatter (`title`, `description`, `icon`, `full`) drawn from Notion page properties (property names are configurable)
-- `_meta.json` per non-leaf directory, listing child slugs in Notion's order (driven by an `afterAll` hook)
+- `meta.json` per non-leaf directory, listing child slugs in Notion's order (driven by an `afterAll` hook)
 - MDX block transformations (via the `mdx-blocks` plugin)
 - Draft filtering via a Notion checkbox property (default: `Published`); missing property = keep
 
@@ -468,6 +473,7 @@ const config: Config = {
   cache: true,                        // incremental sync; true (default), false, or custom path
   cleanup: true,                      // delete files for pages removed/renamed in Notion (default true)
   concurrency: 4,                     // max concurrent Notion fetches during tree build (default 4)
+  rootDir: false,                     // root→contentDir mapping: false (flat, default) | true (folder named after title) | "name" (literal folder)
   plugins: [
     {
       name: "my-plugin",
@@ -496,7 +502,7 @@ export default config;
 `notionPageId` and `roots` are mutually exclusive; supply one or the other.
 Each root can be a page or a wiki — the orchestrator probes each one and
 dispatches accordingly. Each root gets its own `contentDir` and (optionally)
-`fileExtension`, falling back to the top-level values when omitted.
+`fileExtension` / `rootDir`, falling back to the top-level values when omitted.
 
 ```ts
 const config: Config = {
@@ -520,3 +526,4 @@ Semantics:
 - Cleanup is scoped per root — orphans in one root can't touch another root's files.
 - Cache file is shared and keyed by root id; CI cache restoration covers every root in one go.
 - Roots run sequentially (they typically share a Notion workspace and would otherwise compete for rate limits).
+- **Each root must resolve to a distinct output directory** (`contentDir` when flat, `contentDir/<name>` when `rootDir` is set). Two roots landing on the same directory would intermix files, and cross-root slug collisions aren't deduped (slug reservation is per-root), so they'd silently overwrite. Statically-knowable collisions (flat/string `rootDir`) are rejected in `ConfigSchema.superRefine`; `rootDir: true` folders (title-derived, not known until fetch) are checked at run time in `generate()` against the resolved root `childDir`.

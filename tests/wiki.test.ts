@@ -49,6 +49,7 @@ test("wiki root: flat items become files in a directory; no auto-index", async (
       cache: false,
       cleanup: false,
       concurrency: 4,
+      rootDir: false,
     };
 
     const stats = await generate(config, {
@@ -59,17 +60,15 @@ test("wiki root: flat items become files in a directory; no auto-index", async (
     // Wiki root is directory-only; two items written.
     assert.equal(stats.written, 2);
 
-    // Roots use the synthetic "Root" name for path resolution by convention.
-    const wikiDir = path.join(dir, "root");
-    assert.ok(fs.statSync(wikiDir).isDirectory(), "wiki dir created");
+    // A wiki root maps directly onto contentDir — items land there directly.
     // No auto-index — the wiki has no own file.
-    assert.equal(fs.existsSync(path.join(wikiDir, "index.md")), false);
+    assert.equal(fs.existsSync(path.join(dir, "index.md")), false);
     assert.equal(
-      fs.readFileSync(path.join(wikiDir, "getting-started.md"), "utf-8"),
+      fs.readFileSync(path.join(dir, "getting-started.md"), "utf-8"),
       "# getting started",
     );
     assert.equal(
-      fs.readFileSync(path.join(wikiDir, "reference.md"), "utf-8"),
+      fs.readFileSync(path.join(dir, "reference.md"), "utf-8"),
       "# reference",
     );
   } finally {
@@ -114,6 +113,7 @@ test("wiki root: nested wiki items reconstruct hierarchy from parent refs", asyn
       cache: false,
       cleanup: false,
       concurrency: 4,
+      rootDir: false,
     };
 
     await generate(config, {
@@ -121,16 +121,84 @@ test("wiki root: nested wiki items reconstruct hierarchy from parent refs", asyn
       notion: asNotionParser(fake),
     });
 
-    // Parent has a child, so it becomes a directory with index.md.
-    const wikiDir = path.join(dir, "root");
+    // Parent has a child, so it becomes a directory with index.md, directly
+    // under contentDir (the wiki root maps onto contentDir).
     assert.ok(
-      fs.existsSync(path.join(wikiDir, "parent", "index.md")),
+      fs.existsSync(path.join(dir, "parent", "index.md")),
       "parent item rendered as directory index",
     );
     assert.ok(
-      fs.existsSync(path.join(wikiDir, "parent", "child.md")),
+      fs.existsSync(path.join(dir, "parent", "child.md")),
       "child rendered as leaf inside parent dir",
     );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("wiki: sub-page appearing as both a DB row and a child_page block is not duplicated", async () => {
+  const dir = mkTmpDir();
+  try {
+    // Real Notion returns a nested wiki entry twice: once as a data-source row
+    // (parent = page_id of the parent entry) and once as a `child_page` block
+    // in the parent entry's block stream. `parent-item` therefore lists
+    // `child-item` in its `children` (→ child_page block) AND `child-item`
+    // shows up in the flat data-source query with a page_id parent.
+    const fake = new FakeNotionParser(
+      [],
+      [
+        {
+          id: "wiki1",
+          title: "Wiki",
+          items: [
+            {
+              id: "parent-item",
+              title: "Parent",
+              markdown: "# parent",
+              children: ["child-item"],
+              parent: { type: "data_source_id", data_source_id: "wiki1-ds", database_id: "wiki1-ds-db" },
+            },
+            {
+              id: "child-item",
+              title: "Child",
+              markdown: "# child",
+              children: [],
+              parent: { type: "page_id", page_id: "parent-item" },
+            },
+          ],
+        },
+      ],
+    );
+
+    const config: Config = {
+      notionToken: "fake",
+      notionPageId: "wiki1",
+      contentDir: dir,
+      fileExtension: "md",
+      cache: false,
+      cleanup: false,
+      concurrency: 4,
+      rootDir: false,
+    };
+
+    const stats = await generate(config, {
+      logger: silentLogger(),
+      notion: asNotionParser(fake),
+    });
+
+    const parentDir = path.join(dir, "parent");
+    // Exactly one child file — no `child-2.md` from the duplicate block.
+    const files = fs
+      .readdirSync(parentDir)
+      .filter((f) => f !== "index.md")
+      .sort();
+    assert.deepEqual(files, ["child.md"]);
+    assert.equal(
+      fs.readFileSync(path.join(parentDir, "child.md"), "utf-8"),
+      "# child",
+    );
+    // parent index + child leaf = 2 writes, not 3+.
+    assert.equal(stats.written, 2);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -166,6 +234,7 @@ test("wiki root: classification is auto-detected; no config flag needed", async 
       cache: false,
       cleanup: false,
       concurrency: 4,
+      rootDir: false,
     };
 
     await generate(config, {
@@ -213,6 +282,7 @@ test("wiki: caching keyed by wiki id behaves like page cache (unchanged → skip
       cache: cachePath,
       cleanup: false,
       concurrency: 4,
+      rootDir: false,
     };
 
     await generate(config, {
@@ -266,6 +336,7 @@ test("wiki node carries database metadata for plugins", async () => {
       cache: false,
       cleanup: false,
       concurrency: 4,
+      rootDir: false,
       plugins: [
         {
           name: "observe",
@@ -332,6 +403,7 @@ test("mixed: regular page with a child_database becomes a heterogeneous tree", a
       cache: false,
       cleanup: false,
       concurrency: 4,
+      rootDir: false,
     };
 
     await generate(config, {
@@ -339,16 +411,15 @@ test("mixed: regular page with a child_database becomes a heterogeneous tree", a
       notion: asNotionParser(fake),
     });
 
-    // Root has a child_database, so root is a directory with index.md plus a
-    // nested wiki directory holding the wiki item. Root uses synthetic "root"
-    // name by convention.
-    assert.ok(fs.existsSync(path.join(dir, "root", "index.md")));
+    // Root maps onto contentDir: its own body → contentDir/index.md, and the
+    // nested wiki directory holding the wiki item sits directly under it.
+    assert.ok(fs.existsSync(path.join(dir, "index.md")));
     assert.ok(
-      fs.existsSync(path.join(dir, "root", "inner-wiki", "wiki-leaf.md")),
+      fs.existsSync(path.join(dir, "inner-wiki", "wiki-leaf.md")),
       "wiki nested inside regular page produces directory + leaf",
     );
     assert.equal(
-      fs.existsSync(path.join(dir, "root", "inner-wiki", "index.md")),
+      fs.existsSync(path.join(dir, "inner-wiki", "index.md")),
       false,
       "no auto-index for nested wiki",
     );
@@ -387,6 +458,7 @@ test("multi-root: a page root and a wiki root coexist in one run", async () => {
       cache: false,
       cleanup: false,
       concurrency: 4,
+      rootDir: false,
       roots: [
         { notionPageId: "docs", contentDir: docsDir },
         { notionPageId: "wiki1", contentDir: wikiDir },
@@ -398,8 +470,10 @@ test("multi-root: a page root and a wiki root coexist in one run", async () => {
       notion: asNotionParser(fake),
     });
     assert.equal(stats.written, 2);
-    assert.ok(fs.existsSync(path.join(docsDir, "root.md")));
-    assert.ok(fs.existsSync(path.join(wikiDir, "root", "item.md")));
+    // "Docs" is a leaf root → its body writes to <contentDir>/index.md.
+    assert.ok(fs.existsSync(path.join(docsDir, "index.md")));
+    // Wiki root maps onto contentDir → item lands directly under it.
+    assert.ok(fs.existsSync(path.join(wikiDir, "item.md")));
   } finally {
     fs.rmSync(docsDir, { recursive: true, force: true });
     fs.rmSync(wikiDir, { recursive: true, force: true });
@@ -436,6 +510,7 @@ test("wiki filter: returning false on a wiki node skips the entire subtree", asy
       cache: false,
       cleanup: false,
       concurrency: 4,
+      rootDir: false,
       plugins: [
         {
           name: "skip-wiki",
@@ -452,7 +527,8 @@ test("wiki filter: returning false on a wiki node skips the entire subtree", asy
     });
     assert.equal(stats.written, 0);
     assert.equal(stats.filtered, 1);
-    assert.equal(fs.existsSync(path.join(dir, "root")), false);
+    // Whole wiki filtered → nothing written into contentDir.
+    assert.deepEqual(fs.readdirSync(dir), []);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
