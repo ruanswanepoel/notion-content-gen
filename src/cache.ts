@@ -150,7 +150,13 @@ function isWithin(child: string, parent: string): boolean {
   return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
-function pruneEmptyDirs(
+/**
+ * Removes any directory in `dirs` that has become empty, walking upward toward
+ * `root` so a chain of newly-emptied ancestors collapses too. Never removes
+ * `root` itself. Exported so plugins that write (and clean up) their own
+ * sidecar files can reuse the same pruning logic core uses for page files.
+ */
+export function pruneEmptyDirs(
   dirs: Set<string>,
   root: string,
   logger: Logger | undefined,

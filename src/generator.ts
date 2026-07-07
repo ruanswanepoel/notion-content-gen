@@ -10,6 +10,8 @@ type GeneratorConfig = {
   fileExtension?: string;
   plugins?: Plugin[];
   dryRun?: boolean;
+  /** Resolved `cleanup` config flag, surfaced to plugins via LifecycleContext. */
+  cleanup?: boolean;
   logger?: Logger;
 };
 
@@ -38,9 +40,10 @@ export class Generator {
     fileExtension = "md",
     plugins = [],
     dryRun = false,
+    cleanup = true,
     logger = new Logger(),
   }: GeneratorConfig) {
-    this.config = { fileExtension, plugins, dryRun, logger };
+    this.config = { fileExtension, plugins, dryRun, cleanup, logger };
   }
 
   /**
@@ -54,6 +57,7 @@ export class Generator {
   async run(rootNode: PageNode, contentDir: string): Promise<void> {
     const ctx: LifecycleContext = {
       dryRun: this.config.dryRun,
+      cleanup: this.config.cleanup,
       logger: this.config.logger,
     };
     await this.runBeforeAll(rootNode, ctx);

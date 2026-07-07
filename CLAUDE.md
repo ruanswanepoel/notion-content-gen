@@ -74,7 +74,7 @@ src/
      - `transform` hooks modify the markdown string before writing
      - `onFileWritten` hooks fire after each file is written
    - Any error from the filter/write/transform/onFileWritten path is sent to `onError`; if suppressed, the node's children still get a chance to run on leaves (non-leaf failures drop descendants — directory with no index is unusable)
-7. After each root finishes, the orchestrator compares its old cache slice against the new one and deletes any files whose paths are no longer claimed (page deleted, renamed, or moved in Notion). Cleanup is **scoped per root** — orphans from root A can't touch root B's files. Only paths recorded in that root's previous cache are eligible; anything else in `contentDir` is never touched. Empty parent directories are pruned. Cleanup is gated by the `cleanup` config option (default `true`) and is a no-op when caching is disabled.
+7. After each root finishes, the orchestrator compares its old cache slice against the new one and deletes any files whose paths are no longer claimed (page deleted, renamed, or moved in Notion). Cleanup is **scoped per root** — orphans from root A can't touch root B's files. Only paths recorded in that root's previous cache are eligible; anything else in `contentDir` is never touched. Empty parent directories are pruned. Cleanup is gated by the `cleanup` config option (default `true`) and is a no-op when caching is disabled. **Sidecar cleanup is the writing plugin's job:** core cleanup only tracks cache-recorded *page* files, not plugin-written sidecars. The fumadocs preset therefore reconciles its own `meta.json` files in its `afterAll` hook — after (re)writing the current sidebars it removes any `meta.json` under the root that it did not write this run (orphaned by a fully-drafted/deleted/renamed directory) and prunes the emptied dirs (reusing core's exported `pruneEmptyDirs`), gated on `ctx.cleanup`.
 8. After every root has finished, the merged cache (`{ version: 2, roots: { [rootId]: { entries: {...} } } }`) is written back to the sidecar JSON file in a single write.
 
 ## Incremental sync
@@ -213,8 +213,8 @@ opt out of frontmatter / sidebar entries.
 ### Hooks reference
 
 - **`setup({ notion, dryRun, logger })`** — runs **once per generate run** before any Notion API call, regardless of how many roots the config has. Use this to register `notion-to-md` custom transformers, prime caches, or otherwise configure the parser. Plugins run sequentially in declaration order.
-- **`beforeAll(tree, ctx)`** — runs **once per root**, after that root's tree is built and before any of its files are written. Plugins receive each root's tree separately. `ctx` is `{ dryRun, logger }`.
-- **`afterAll(tree, ctx)`** — runs **once per root**, after the last file is written for that root, *in dry-run mode too* so plugins can run validation. Plugins that write sidecar artifacts (e.g. `_meta.json`) should guard on `ctx.dryRun`.
+- **`beforeAll(tree, ctx)`** — runs **once per root**, after that root's tree is built and before any of its files are written. Plugins receive each root's tree separately. `ctx` is `{ dryRun, cleanup, logger }`.
+- **`afterAll(tree, ctx)`** — runs **once per root**, after the last file is written for that root, *in dry-run mode too* so plugins can run validation. Plugins that write sidecar artifacts (e.g. `meta.json`) should guard on `ctx.dryRun`, and if they clean up their own stale sidecars should honor `ctx.cleanup` (the resolved config flag) so their removal respects the same opt-out as core stale-file cleanup.
 - **`filter(node)`** — runs *during tree build*, immediately after the page is fetched. Returning `false` skips the node and its descendants — neither the subtree's markdown conversion nor its child fetches happen. The Generator honors the build-time decision; it does not re-invoke `filter`. First plugin to return `false` wins.
 - **`transform(content, node)`** — pipeline: each plugin receives the previous plugin's output. Use for frontmatter injection, block transformations, etc.
 - **`onFileWritten(filePath, node)`** — fires once per successful write. Skipped in dry-run.
@@ -424,7 +424,7 @@ Maps Notion block types to MDX components:
 Bundles the plugins required for Fumadocs-compatible output:
 
 - YAML frontmatter (`title`, `description`, `icon`, `full`) drawn from Notion page properties (property names are configurable)
-- `meta.json` per non-leaf directory, listing child slugs in Notion's order (driven by an `afterAll` hook)
+- `meta.json` per non-leaf directory, listing child slugs in Notion's order (driven by an `afterAll` hook); the same hook also removes `meta.json` sidecars orphaned since the last run and prunes the emptied directories, gated on `ctx.cleanup`
 - MDX block transformations (via the `mdx-blocks` plugin)
 - Draft filtering via a Notion checkbox property (default: `Published`); missing property = keep
 

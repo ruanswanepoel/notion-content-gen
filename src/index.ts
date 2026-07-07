@@ -143,6 +143,7 @@ export async function generate(config: Config, options: GenerateOptions = {}) {
       fileExtension: root.fileExtension,
       plugins,
       dryRun,
+      cleanup: config.cleanup,
       logger,
     });
     await generator.run(pageTree, root.contentDir);

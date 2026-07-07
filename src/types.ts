@@ -58,6 +58,12 @@ export type SetupContext = {
 export type LifecycleContext = {
   /** True when the current generate run was started with `--dry-run`. */
   dryRun: boolean;
+  /**
+   * The resolved `cleanup` config flag. Plugins that write their own sidecar
+   * files (e.g. the fumadocs preset's `meta.json`) should honor it so their
+   * cleanup respects the same opt-out as core stale-file removal.
+   */
+  cleanup: boolean;
   logger: Logger;
 };
 
