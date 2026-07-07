@@ -96,10 +96,16 @@ export function fumadocsPreset(
 }
 
 function writeMetaFiles(node: PageNode): void {
-  if (node.childNodes.length === 0 || !node.childDir) return;
-  const pages = node.childNodes
+  if (!node.childDir) return;
+  // Drafts are flagged `filtered` (their MDX is never written) but remain in
+  // the tree with a resolved `filePath`. They must not appear in the sidebar,
+  // so drop them before deriving slugs and before recursing.
+  const publishedChildren = node.childNodes.filter((c) => !c.filtered);
+  if (publishedChildren.length === 0) return;
+  const pages = publishedChildren
     .map((child) => slugForMeta(child))
     .filter((s): s is string => Boolean(s));
+  if (pages.length === 0) return;
   // Fumadocs reads a folder's meta from a file named `meta.json` (basename
   // `meta`); an underscore-prefixed name is collected but never applied.
   const metaPath = path.join(node.childDir, "meta.json");
@@ -107,7 +113,7 @@ function writeMetaFiles(node: PageNode): void {
     fs.mkdirSync(node.childDir, { recursive: true });
   }
   fs.writeFileSync(metaPath, JSON.stringify({ pages }, null, 2));
-  for (const child of node.childNodes) {
+  for (const child of publishedChildren) {
     writeMetaFiles(child);
   }
 }
